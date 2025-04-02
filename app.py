@@ -199,8 +199,8 @@ def account_details():
     account = Account.query.filter_by(user_id=current_user.id).first()
 
     if not account:
-        flash("You need to activate your account first", "warning")
-        return redirect(url_for("activate_account"))
+        flash("Account not found", "error")
+        return redirect(url_for("user_dashboard"))
 
     # Get recent transactions
     transactions = (
@@ -764,16 +764,39 @@ def user_register():
         id_card = request.form.get("id_card")
         email = request.form.get("email")
         password = request.form.get("password")
+        phone_number = request.form.get("phone_number")
+
+        # Format phone number
+        if not phone_number.startswith("+250"):
+            phone_number = "+250" + phone_number.lstrip("0")
 
         new_user = User(
-            full_name=full_name, id_card=id_card, email=email, password=password
+            full_name=full_name,
+            id_card=id_card,
+            email=email,
+            password=password,
+            phone_number=phone_number
         )
         db.session.add(new_user)
+        db.session.commit()
+
+        # Generate a unique account number
+        account_number = f"WM{new_user.id:06d}"
+
+        # Create a new account
+        new_account = Account(
+            user_id=new_user.id,
+            account_number=account_number,
+            balance=0.0,
+            status="active",
+        )
+        db.session.add(new_account)
         db.session.commit()
 
         # Initialize water balance for the new user
         initialize_water_balance(new_user.id)
 
+        flash("Registration successful! Please login.", "success")
         return redirect(url_for("login"))
     return render_template("auth/register.html")
 
