@@ -1,0 +1,165 @@
+{% extends "shared/base.html" %}
+
+{% block page_title %}Valve Control{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <!-- Flash Messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+    {% for category, message in messages %}
+    <div class="mb-4 p-4 rounded-md {% if category == 'error' %}bg-red-100 text-red-700{% else %}bg-green-100 text-green-700{% endif %}">
+        {{ message }}
+    </div>
+    {% endfor %}
+    {% endif %}
+    {% endwith %}
+
+    <div class="bg-white rounded-lg shadow-md overflow-hidden">
+        <div class="p-6">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6">Water Valve Control</h2>
+            
+            <!-- Current Status Card -->
+            <div class="bg-gray-50 p-6 rounded-lg mb-6">
+                <h3 class="text-xl font-semibold text-gray-800 mb-4">Current Status</h3>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <!-- Valve Status -->
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <h4 class="text-sm font-medium text-gray-500">Valve Status</h4>
+                        <p id="valve-status" class="text-2xl font-bold {% if valve_status == 'open' %}text-green-600{% else %}text-red-600{% endif %}">
+                            {{ valve_status|title }}
+                        </p>
+                    </div>
+                    
+                    <!-- Water Balance -->
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <h4 class="text-sm font-medium text-gray-500">Water Balance</h4>
+                        <p id="water-balance" class="text-2xl font-bold text-blue-600">
+                            {{ remaining_water|round(3) }} m³
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Real-time Water Flow -->
+            <div class="bg-gray-50 p-6 rounded-lg mb-6">
+                <h3 class="text-xl font-semibold text-gray-800 mb-4">Real-time Water Flow</h3>
+                
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <!-- Flow Rate -->
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <h4 class="text-sm font-medium text-gray-500">Current Flow Rate</h4>
+                        <p id="flow-rate" class="text-2xl font-bold text-blue-600">0.0 L/s</p>
+                    </div>
+                    
+                    <!-- Current Usage -->
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <h4 class="text-sm font-medium text-gray-500">Current Usage</h4>
+                        <p id="current-usage" class="text-2xl font-bold text-blue-600">0.000 m³</p>
+                    </div>
+                    
+                    <!-- Time Elapsed -->
+                    <div class="bg-white p-4 rounded-lg shadow">
+                        <h4 class="text-sm font-medium text-gray-500">Time Elapsed</h4>
+                        <p id="time-elapsed" class="text-2xl font-bold text-blue-600">0s</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Valve Control Buttons -->
+            <div class="bg-gray-50 p-6 rounded-lg mb-6">
+                <h3 class="text-xl font-semibold text-gray-800 mb-4">Control Valve</h3>
+                
+                <div class="flex space-x-4">
+                    <form action="{{ url_for('valve_control') }}" method="post" class="flex-1">
+                        <input type="hidden" name="action" value="open">
+                        <button type="submit" 
+                                class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-md transition duration-200 {% if not has_balance %}opacity-50 cursor-not-allowed{% endif %}"
+                                {% if not has_balance %}disabled{% endif %}>
+                            Open Valve
+                        </button>
+                    </form>
+                    
+                    <form action="{{ url_for('valve_control') }}" method="post" class="flex-1">
+                        <input type="hidden" name="action" value="close">
+                        <button type="submit" 
+                                class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-md transition duration-200">
+                            Close Valve
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Recent Usage History -->
+            <div class="bg-gray-50 p-6 rounded-lg">
+                <h3 class="text-xl font-semibold text-gray-800 mb-4">Recent Usage History</h3>
+                
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-gray-200">
+                        <thead class="bg-gray-50">
+                            <tr>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Date & Time
+                                </th>
+                                <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                                    Usage (m³)
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody class="bg-white divide-y divide-gray-200">
+                            {% for usage in recent_usage %}
+                            <tr>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    {{ usage.timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+                                </td>
+                                <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                    {{ usage.usage_amount|round(3) }}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// Function to update real-time water flow data
+function updateWaterFlow() {
+    fetch(`/api/water-flow/{{ current_user.id }}`)
+        .then(response => response.json())
+        .then(data => {
+            // Update valve status
+            const valveStatus = document.getElementById('valve-status');
+            valveStatus.textContent = data.valve_status.charAt(0).toUpperCase() + data.valve_status.slice(1);
+            valveStatus.className = `text-2xl font-bold ${data.valve_status === 'open' ? 'text-green-600' : 'text-red-600'}`;
+
+            // Update water balance
+            document.getElementById('water-balance').textContent = `${data.remaining_balance.toFixed(3)} m³`;
+
+            // Update flow rate
+            document.getElementById('flow-rate').textContent = `${data.current_flow_rate.toFixed(1)} L/s`;
+
+            // Update current usage
+            document.getElementById('current-usage').textContent = `${data.estimated_usage.toFixed(3)} m³`;
+
+            // Update time elapsed
+            if (data.time_elapsed) {
+                const minutes = Math.floor(data.time_elapsed / 60);
+                const seconds = Math.floor(data.time_elapsed % 60);
+                document.getElementById('time-elapsed').textContent = `${minutes}m ${seconds}s`;
+            }
+        })
+        .catch(error => console.error('Error fetching water flow data:', error));
+}
+
+// Update water flow data every second
+setInterval(updateWaterFlow, 1000);
+
+// Initial update
+updateWaterFlow();
+</script>
+{% endblock %}

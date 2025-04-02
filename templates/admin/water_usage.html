@@ -1,0 +1,59 @@
+{% extends "shared/base.html" %}
+
+{% block page_title %}Usage Monitoring{% endblock %}
+
+{% block content %}
+<div class="grid grid-cols-1 gap-6">
+    <!-- High Usage Users -->
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <h2 class="text-xl font-semibold mb-4">High Consumption Users</h2>
+        <div class="overflow-x-auto">
+            <table class="min-w-full table-auto">
+                <thead class="bg-gray-50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">User</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Usage</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Readings</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-200">
+                    {% for user in high_usage %}
+                    <tr>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <div>
+                                <p class="font-medium">{{ user.full_name }}</p>
+                                <p class="text-sm text-gray-500">{{ user.email }}</p>
+                            </div>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <span class="text-red-600 font-medium">{{ user.total_usage|round(2) }} L</span>
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap">{{ user.reading_count }}</td>
+                        <td class="px-6 py-4 whitespace-nowrap">
+                            <button class="text-red-600 hover:text-red-900">Send Warning</button>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Usage Spikes -->
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <h2 class="text-xl font-semibold mb-4">Sudden Usage Spikes</h2>
+        <div class="space-y-4">
+            {% for usage in spike_users %}
+            <div class="flex items-center justify-between border-b pb-4">
+                <div>
+                    <p class="font-medium">{{ usage.counter.user.full_name }}</p>
+                    <p class="text-sm text-gray-500">Usage: {{ usage.usage_amount|round(2) }} L</p>
+                </div>
+                <button class="text-blue-600 hover:text-blue-900">Investigate</button>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}
