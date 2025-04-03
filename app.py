@@ -125,6 +125,7 @@ class WaterUsage(db.Model):
     counter_id = db.Column(db.Integer, db.ForeignKey("counter.id"), nullable=False)
     usage_amount = db.Column(db.Float, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    acknowledged = db.Column(db.Boolean, default=False)
 
 
 # Update the Payment model
@@ -247,11 +248,9 @@ def admin_login():
         username = request.form.get("username")
         password = request.form.get("password")
         admin = Admin.query.filter_by(username=username).first()
-
         if admin and admin.password == password:
             login_user(admin)
             return redirect(url_for("admin_dashboard"))
-
     return render_template("auth/login.html")
 
 
@@ -554,26 +553,35 @@ def admin_activities():
 @app.route("/admin/alerts")
 @login_required
 def admin_alerts():
-    # Get all alerts with pagination
-    page = request.args.get("page", 1, type=int)
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
 
     alerts = []
 
-    # High usage alerts
+    # High usage alerts (only unacknowledged)
     high_usage = (
-        WaterUsage.query.filter(WaterUsage.usage_amount > 1000)
+        WaterUsage.query.filter(
+            WaterUsage.usage_amount > 1000,
+            WaterUsage.acknowledged == False
+        )
         .distinct(WaterUsage.counter_id)
         .all()
     )
 
     for usage in high_usage:
+        counter = Counter.query.get(usage.counter_id)
+        user = User.query.get(counter.user_id) if counter else None
         alerts.append(
             {
                 "severity": "Critical",
                 "severity_color": "red",
                 "title": "High Usage Alert",
-                "details": f"Counter ID: {usage.counter_id}",
+                "details": f"Counter {counter.counter_id} ({user.full_name if user else 'Unknown'}) used {usage.usage_amount} m³",
                 "timestamp": usage.timestamp,
+                "usage": usage
             }
         )
 
@@ -585,8 +593,9 @@ def admin_alerts():
                 "severity": "Warning",
                 "severity_color": "yellow",
                 "title": "Low Balance Alert",
-                "details": f"User: {user.full_name}",
+                "details": f"User: {user.full_name} (Balance: RWF {user.balance:,.2f})",
                 "timestamp": datetime.now(),
+                "user": user
             }
         )
 
@@ -594,6 +603,67 @@ def admin_alerts():
     alerts.sort(key=lambda x: (x["severity"], x["timestamp"]), reverse=True)
 
     return render_template("admin/alerts.html", alerts=alerts)
+
+@app.route("/admin/alerts/<int:alert_index>/dismiss", methods=["POST"])
+@login_required
+def dismiss_alert(alert_index):
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        return jsonify({"success": False, "message": "Access denied"}), 403
+
+    try:
+        # Get all alerts
+        alerts = []
+        high_usage = WaterUsage.query.filter(WaterUsage.usage_amount > 1000).distinct(WaterUsage.counter_id).all()
+        for usage in high_usage:
+            alerts.append({
+                "severity": "Critical",
+                "severity_color": "red",
+                "title": "High Usage Alert",
+                "details": f"Counter ID: {usage.counter_id}",
+                "timestamp": usage.timestamp,
+                "usage": usage
+            })
+
+        low_balance_users = User.query.filter(User.balance < 1000).all()
+        for user in low_balance_users:
+            alerts.append({
+                "severity": "Warning",
+                "severity_color": "yellow",
+                "title": "Low Balance Alert",
+                "details": f"User: {user.full_name}",
+                "timestamp": datetime.now(),
+                "user": user
+            })
+
+        alerts.sort(key=lambda x: (x["severity"], x["timestamp"]), reverse=True)
+
+        if alert_index < 0 or alert_index >= len(alerts):
+            return jsonify({"success": False, "message": "Invalid alert index"}), 400
+
+        alert = alerts[alert_index]
+
+        # Handle different types of alerts
+        if "usage" in alert:
+            # For high usage alerts, mark the usage as acknowledged
+            usage = alert["usage"]
+            usage.acknowledged = True
+            db.session.commit()
+        elif "user" in alert:
+            # For low balance alerts, we could add a grace period or send notification
+            user = alert["user"]
+            if user.pushover_key:
+                send_pushover_notification(
+                    user.pushover_key,
+                    "Low Balance Warning",
+                    f"Your account balance is low (RWF {user.balance}). Please recharge soon to avoid service interruption."
+                )
+
+        return jsonify({"success": True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 def timeago(date):
