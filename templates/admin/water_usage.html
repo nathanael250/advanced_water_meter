@@ -1,37 +1,91 @@
 {% extends "shared/base.html" %}
 
-{% block page_title %}Usage Monitoring{% endblock %}
+{% block page_title %}Water Usage{% endblock %}
 
 {% block content %}
-<div class="grid grid-cols-1 gap-6">
-    <!-- High Usage Users -->
+<div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
     <div class="bg-white rounded-lg shadow-md p-6">
-        <h2 class="text-xl font-semibold mb-4">High Consumption Users</h2>
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold text-gray-900">Water Usage Records</h2>
+            <button onclick="openAddReadingModal()" class="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">
+                Add New Reading
+            </button>
+        </div>
+
+        <!-- Flash Messages -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+        {% for category, message in messages %}
+        <div class="mb-4 p-4 rounded-md {% if category == 'error' %}bg-red-100 text-red-700{% else %}bg-green-100 text-green-700{% endif %}">
+            {{ message }}
+        </div>
+        {% endfor %}
+        {% endif %}
+        {% endwith %}
+
+        <!-- Usage Statistics -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+            <div class="bg-blue-50 p-6 rounded-lg">
+                <h3 class="text-lg font-semibold text-blue-800 mb-2">Total Consumption</h3>
+                <p class="text-3xl font-bold text-blue-600">{{ total_usage|default(0) }} m³</p>
+            </div>
+            <div class="bg-green-50 p-6 rounded-lg">
+                <h3 class="text-lg font-semibold text-green-800 mb-2">Average Daily Usage</h3>
+                <p class="text-3xl font-bold text-green-600">{{ avg_usage|default(0)|round(2) }} m³</p>
+            </div>
+            <div class="bg-yellow-50 p-6 rounded-lg">
+                <h3 class="text-lg font-semibold text-yellow-800 mb-2">High Usage Meters</h3>
+                <p class="text-3xl font-bold text-yellow-600">{{ high_usage|length }}</p>
+            </div>
+        </div>
+
+        <!-- Usage Table -->
         <div class="overflow-x-auto">
-            <table class="min-w-full table-auto">
+            <table class="min-w-full divide-y divide-gray-200">
                 <thead class="bg-gray-50">
                     <tr>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">User</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Total Usage</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Readings</th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Date
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Meter ID
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            User
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Usage (m³)
+                        </th>
+                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                            Status
+                        </th>
                     </tr>
                 </thead>
-                <tbody class="divide-y divide-gray-200">
-                    {% for user in high_usage %}
+                <tbody class="bg-white divide-y divide-gray-200">
+                    {% for usage in usage_data %}
                     <tr>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <div>
-                                <p class="font-medium">{{ user.full_name }}</p>
-                                <p class="text-sm text-gray-500">{{ user.email }}</p>
-                            </div>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {{ usage.timestamp.strftime('%Y-%m-%d %H:%M') }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                            {{ usage.counter.counter_id }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {{ usage.counter.user.full_name if usage.counter.user else 'Unassigned' }}
+                        </td>
+                        <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {{ usage.usage_amount }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <span class="text-red-600 font-medium">{{ user.total_usage|round(2) }} L</span>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">{{ user.reading_count }}</td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <button class="text-red-600 hover:text-red-900">Send Warning</button>
+                            {% if usage.usage_amount > 1000 %}
+                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+                                High Usage
+                            </span>
+                            {% else %}
+                            <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
+                                Normal
+                            </span>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -39,21 +93,51 @@
             </table>
         </div>
     </div>
+</div>
 
-    <!-- Usage Spikes -->
-    <div class="bg-white rounded-lg shadow-md p-6">
-        <h2 class="text-xl font-semibold mb-4">Sudden Usage Spikes</h2>
-        <div class="space-y-4">
-            {% for usage in spike_users %}
-            <div class="flex items-center justify-between border-b pb-4">
+<!-- Add Reading Modal -->
+<div id="addReadingModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 hidden overflow-y-auto h-full w-full">
+    <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+        <div class="mt-3">
+            <h3 class="text-lg font-medium text-gray-900 mb-4">Add New Reading</h3>
+            <form action="{{ url_for('add_reading') }}" method="POST" class="space-y-4">
                 <div>
-                    <p class="font-medium">{{ usage.counter.user.full_name }}</p>
-                    <p class="text-sm text-gray-500">Usage: {{ usage.usage_amount|round(2) }} L</p>
+                    <label class="block text-sm font-medium text-gray-700">Select Meter</label>
+                    <select name="counter_id" required
+                            class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                        <option value="">Select a meter</option>
+                        {% for counter in counters %}
+                        <option value="{{ counter.counter_id }}">{{ counter.counter_id }} - {{ counter.user.full_name if counter.user else 'Unassigned' }}</option>
+                        {% endfor %}
+                    </select>
                 </div>
-                <button class="text-blue-600 hover:text-blue-900">Investigate</button>
-            </div>
-            {% endfor %}
+                <div>
+                    <label class="block text-sm font-medium text-gray-700">Usage Amount (m³)</label>
+                    <input type="number" name="usage_amount" step="0.01" required
+                           class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                </div>
+                <div class="flex justify-end space-x-3">
+                    <button type="button" onclick="closeAddReadingModal()"
+                            class="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-md hover:bg-gray-200">
+                        Cancel
+                    </button>
+                    <button type="submit"
+                            class="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700">
+                        Add Reading
+                    </button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
+
+<script>
+function openAddReadingModal() {
+    document.getElementById('addReadingModal').classList.remove('hidden');
+}
+
+function closeAddReadingModal() {
+    document.getElementById('addReadingModal').classList.add('hidden');
+}
+</script>
 {% endblock %}

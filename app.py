@@ -255,204 +255,297 @@ def admin_login():
     return render_template("auth/login.html")
 
 
-# @app.route('/admin')
-# @login_required
-# def admin_dashboard():
-#     return render_template('admin/dashboard.html')
-
-
 @app.route("/admin")
 @login_required
 def admin_dashboard():
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
+
     # Get total water meters
     total_meters = Counter.query.count()
-
-    # Calculate daily consumption
-    today = datetime.now().date()
-    daily_consumption = (
-        WaterUsage.query.filter(func.date(WaterUsage.timestamp) == today)
-        .with_entities(func.sum(WaterUsage.usage_amount))
-        .scalar()
-        or 0
-    )
-
-    # Calculate monthly revenue and growth
-    first_of_month = datetime.now().replace(day=1)
-    monthly_revenue = (
-        Payment.query.filter(
-            Payment.status == "success", Payment.timestamp >= first_of_month
-        )
-        .with_entities(func.sum(Payment.amount))
-        .scalar()
-        or 0
-    )
-
-    # Calculate previous month revenue for growth percentage
-    prev_month = first_of_month - timedelta(days=30)
-    prev_revenue = (
-        Payment.query.filter(
-            Payment.status == "success",
-            Payment.timestamp >= prev_month,
-            Payment.timestamp < first_of_month,
-        )
-        .with_entities(func.sum(Payment.amount))
-        .scalar()
-        or 0
-    )
-
-    revenue_growth = (
-        ((monthly_revenue - prev_revenue) / prev_revenue * 100)
-        if prev_revenue > 0
-        else 0
-    )
-
-    # Get consumption trend (last 7 days)
-    consumption_trend = []
-    for i in range(7):
-        date = today - timedelta(days=i)
-        usage = (
-            WaterUsage.query.filter(func.date(WaterUsage.timestamp) == date)
-            .with_entities(func.sum(WaterUsage.usage_amount))
-            .scalar()
-            or 0
-        )
-        consumption_trend.append({"date": date.strftime("%a"), "usage": float(usage)})
-    consumption_trend.reverse()
-
-    # Get revenue analysis (last 6 months)
-    revenue_analysis = []
-    for i in range(6):
-        date = first_of_month - timedelta(days=30 * i)
-        revenue = (
-            Payment.query.filter(
-                Payment.status == "success",
-                func.extract("month", Payment.timestamp) == date.month,
-                func.extract("year", Payment.timestamp) == date.year,
-            )
-            .with_entities(func.sum(Payment.amount))
-            .scalar()
-            or 0
-        )
-        revenue_analysis.append(
-            {"month": date.strftime("%b"), "revenue": float(revenue)}
-        )
-    revenue_analysis.reverse()
+    total_users = User.query.count()
+    total_payments = Payment.query.count()
+    total_loans = WaterLoan.query.count()
 
     # Get recent activities
+    recent_usage = WaterUsage.query.order_by(WaterUsage.timestamp.desc()).limit(5).all()
+    recent_payments = Payment.query.order_by(Payment.timestamp.desc()).limit(5).all()
+    recent_loans = WaterLoan.query.order_by(WaterLoan.borrowed_at.desc()).limit(5).all()
+
+    # Get statistics
+    total_revenue = Payment.query.filter_by(status="success").with_entities(func.sum(Payment.amount)).scalar() or 0
+    pending_payments = Payment.query.filter_by(status="pending").count()
+    active_loans = WaterLoan.query.filter_by(status="active").count()
+
+    # Calculate daily consumption (last 24 hours)
+    yesterday = datetime.utcnow() - timedelta(days=1)
+    daily_usage = WaterUsage.query.filter(WaterUsage.timestamp >= yesterday).with_entities(func.sum(WaterUsage.usage_amount)).scalar() or 0
+    daily_consumption = daily_usage * 1000  # Convert to liters
+
+    # Calculate monthly revenue
+    first_day_of_month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    monthly_revenue = Payment.query.filter(
+        Payment.status == "success",
+        Payment.timestamp >= first_day_of_month
+    ).with_entities(func.sum(Payment.amount)).scalar() or 0
+
+    # Calculate revenue growth
+    last_month = first_day_of_month - timedelta(days=1)
+    last_month_first_day = last_month.replace(day=1)
+    last_month_revenue = Payment.query.filter(
+        Payment.status == "success",
+        Payment.timestamp >= last_month_first_day,
+        Payment.timestamp < first_day_of_month
+    ).with_entities(func.sum(Payment.amount)).scalar() or 0
+    
+    revenue_growth = 0
+    if last_month_revenue > 0:
+        revenue_growth = ((monthly_revenue - last_month_revenue) / last_month_revenue) * 100
+
+    # Get active alerts
+    active_alerts = []
+    high_usage = WaterUsage.query.filter(WaterUsage.usage_amount > 1000).order_by(WaterUsage.timestamp.desc()).limit(5).all()
+    for usage in high_usage:
+        counter = Counter.query.get(usage.counter_id)
+        if counter:
+            active_alerts.append({
+                "severity": "High",
+                "severity_color": "red",
+                "icon": '<svg class="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>',
+                "title": "High Water Usage",
+                "details": f"Counter {counter.id} used {usage.usage_amount} m³"
+            })
+
+    # Prepare recent activities
     recent_activities = []
+    for usage in recent_usage:
+        counter = Counter.query.get(usage.counter_id)
+        user = User.query.get(counter.user_id) if counter else None
+        recent_activities.append({
+            "type": "usage",
+            "type_color": "blue",
+            "icon": '<svg class="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
+            "title": "Water Usage Recorded",
+            "details": f"Counter: {counter.id if counter else 'Unknown'} - User: {user.full_name if user else 'Unknown'} - {usage.usage_amount} m³",
+            "timestamp": usage.timestamp
+        })
 
-    # Add new meter installations
-    new_meters = Counter.query.order_by(Counter.created_at.desc()).limit(5).all()
-    for meter in new_meters:
-        recent_activities.append(
-            {
-                "type": "installation",
-                "type_color": "blue",
-                "icon": '<svg class="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>',
-                "title": "New Water Meter Installation",
-                "details": f"Counter ID: {meter.counter_id}",
-                "timestamp": meter.created_at,
-            }
-        )
-
-    # Add recent payments
-    recent_payments = (
-        Payment.query.filter_by(status="success")
-        .order_by(Payment.timestamp.desc())
-        .limit(5)
-        .all()
-    )
     for payment in recent_payments:
         user = User.query.get(payment.user_id)
-        recent_activities.append(
-            {
-                "type": "payment",
-                "type_color": "green",
-                "icon": '<svg class="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
-                "title": "Payment Received",
-                "details": f"{user.full_name} - RWF {payment.amount:,}",
-                "timestamp": payment.timestamp,
-            }
-        )
+        recent_activities.append({
+            "type": "payment",
+            "type_color": "green",
+            "icon": '<svg class="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            "title": "Payment Received",
+            "details": f"{user.full_name} - RWF {payment.amount:,}",
+            "timestamp": payment.timestamp
+        })
+
+    for loan in recent_loans:
+        user = User.query.get(loan.user_id)
+        recent_activities.append({
+            "type": "loan",
+            "type_color": "yellow",
+            "icon": '<svg class="w-6 h-6 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            "title": "Loan " + ("Repaid" if loan.status == "repaid" else "Borrowed"),
+            "details": f"{user.full_name} - {loan.amount} m³",
+            "timestamp": loan.repaid_at if loan.status == "repaid" else loan.borrowed_at
+        })
 
     # Sort activities by timestamp
     recent_activities.sort(key=lambda x: x["timestamp"], reverse=True)
 
-    # Get active alerts
-    active_alerts = []
-    # Add your alert logic here
-    # Example:
-    high_usage_meters = (
-        WaterUsage.query.filter(WaterUsage.usage_amount > 1000)
-        .distinct(WaterUsage.counter_id)
-        .all()
-    )
-    for usage in high_usage_meters:
-        active_alerts.append(
-            {
-                "severity": "Critical",
-                "severity_color": "red",
-                "icon": '<svg class="w-6 h-6 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>',
-                "title": "High Usage Alert",
-                "details": f"Counter ID: {usage.counter_id}",
-            }
-        )
+    # Prepare consumption trend data (last 7 days)
+    consumption_trend = []
+    for i in range(6, -1, -1):
+        date = datetime.utcnow() - timedelta(days=i)
+        start_of_day = date.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_of_day = start_of_day + timedelta(days=1)
+        
+        daily_usage = WaterUsage.query.filter(
+            WaterUsage.timestamp >= start_of_day,
+            WaterUsage.timestamp < end_of_day
+        ).with_entities(func.sum(WaterUsage.usage_amount)).scalar() or 0
+        
+        consumption_trend.append({
+            "date": date.strftime("%Y-%m-%d"),
+            "usage": float(daily_usage * 1000)  # Convert to liters
+        })
+
+    # Prepare revenue analysis data (last 6 months)
+    revenue_analysis = []
+    for i in range(5, -1, -1):
+        date = datetime.utcnow() - timedelta(days=30*i)
+        start_of_month = date.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end_of_month = (start_of_month + timedelta(days=32)).replace(day=1)  # Get first day of next month
+        
+        monthly_revenue = Payment.query.filter(
+            Payment.status == "success",
+            Payment.timestamp >= start_of_month,
+            Payment.timestamp < end_of_month
+        ).with_entities(func.sum(Payment.amount)).scalar() or 0
+        
+        revenue_analysis.append({
+            "month": date.strftime("%b %Y"),
+            "revenue": float(monthly_revenue)
+        })
 
     return render_template(
         "admin/dashboard.html",
         total_meters=total_meters,
+        total_users=total_users,
+        total_payments=total_payments,
+        total_loans=total_loans,
+        recent_activities=recent_activities,
+        total_revenue=total_revenue,
+        pending_payments=pending_payments,
+        active_loans=active_loans,
         daily_consumption=daily_consumption,
         monthly_revenue=monthly_revenue,
-        revenue_growth=round(revenue_growth, 1),
-        consumption_trend=consumption_trend,
-        revenue_analysis=revenue_analysis,
-        recent_activities=recent_activities[:5],
+        revenue_growth=revenue_growth,
         active_alerts=active_alerts,
-        alert_count=len(active_alerts),
+        consumption_trend=consumption_trend,
+        revenue_analysis=revenue_analysis
     )
 
+@app.route("/admin/users")
+@login_required
+def admin_users():
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
+
+    # Get filter parameters
+    search = request.args.get("search", "")
+    status = request.args.get("status", "")
+
+    # Build query
+    query = User.query
+
+    # Apply filters
+    if search:
+        query = query.filter(
+            db.or_(
+                User.full_name.ilike(f"%{search}%"),
+                User.email.ilike(f"%{search}%"),
+                User.phone_number.ilike(f"%{search}%"),
+                User.id_card.ilike(f"%{search}%")
+            )
+        )
+    if status:
+        query = query.filter(User.status == status)
+
+    # Get paginated results
+    page = request.args.get("page", 1, type=int)
+    per_page = 20
+    users = query.order_by(User.registration_date.desc()).paginate(page=page, per_page=per_page, error_out=False)
+
+    return render_template("admin/users.html", users=users, search=search, status=status)
+
+@app.route("/admin/users/<int:user_id>/status", methods=["POST"])
+@login_required
+def update_user_status(user_id):
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        return jsonify({"success": False, "message": "Access denied"}), 403
+
+    try:
+        user = User.query.get_or_404(user_id)
+        new_status = request.json.get("status")
+
+        if not new_status:
+            return jsonify({"success": False, "message": "Status is required"}), 400
+
+        # Update user status
+        user.status = new_status
+        db.session.commit()
+
+        return jsonify({"success": True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+@app.route("/admin/users/<int:user_id>/credit-limit", methods=["POST"])
+@login_required
+def update_credit_limit(user_id):
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        return jsonify({"success": False, "message": "Access denied"}), 403
+
+    try:
+        user = User.query.get_or_404(user_id)
+        new_limit = request.json.get("credit_limit", type=float)
+
+        if new_limit is None:
+            return jsonify({"success": False, "message": "Credit limit is required"}), 400
+
+        # Update credit limit
+        user.credit_limit = new_limit
+        db.session.commit()
+
+        return jsonify({"success": True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
 
 @app.route("/admin/activities")
 @login_required
 def admin_activities():
-    # Get all activities with pagination
-    page = request.args.get("page", 1, type=int)
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        return redirect(url_for("dashboard"))
 
-    # Combine installations and payments
+    # Get all activities
     activities = []
+    
+    # Add water usage activities
+    water_usage = WaterUsage.query.order_by(WaterUsage.timestamp.desc()).all()
+    for usage in water_usage:
+        counter = Counter.query.get(usage.counter_id)
+        user = User.query.get(counter.user_id) if counter else None
+        activities.append({
+            "type": "usage",
+            "type_color": "blue",
+            "icon": '<svg class="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
+            "title": "Water Usage Recorded",
+            "details": f"Counter: {counter.id if counter else 'Unknown'} - User: {user.full_name if user else 'Unknown'} - {usage.usage_amount} m³",
+            "timestamp": usage.timestamp
+        })
 
-    # Get meter installations
-    installations = Counter.query.order_by(Counter.created_at.desc()).all()
-    for install in installations:
-        activities.append(
-            {
-                "type": "installation",
-                "type_color": "blue",
-                "title": "New Water Meter Installation",
-                "details": f"Counter ID: {install.counter_id}",
-                "timestamp": install.created_at,
-            }
-        )
-
-    # Get payments
-    payments = (
-        Payment.query.filter_by(status="success")
-        .order_by(Payment.timestamp.desc())
-        .all()
-    )
+    # Add payment activities
+    payments = Payment.query.order_by(Payment.timestamp.desc()).all()
     for payment in payments:
         user = User.query.get(payment.user_id)
-        activities.append(
-            {
-                "type": "payment",
-                "type_color": "green",
-                "title": "Payment Received",
-                "details": f"{user.full_name} - RWF {payment.amount:,}",
-                "timestamp": payment.timestamp,
-            }
-        )
+        activities.append({
+            "type": "payment",
+            "type_color": "green",
+            "icon": '<svg class="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            "title": "Payment Received",
+            "details": f"{user.full_name} - RWF {payment.amount:,}",
+            "timestamp": payment.timestamp
+        })
 
-    # Sort by timestamp
+    # Add loan activities
+    loans = WaterLoan.query.order_by(WaterLoan.borrowed_at.desc()).all()
+    for loan in loans:
+        user = User.query.get(loan.user_id)
+        activities.append({
+            "type": "loan",
+            "type_color": "yellow",
+            "icon": '<svg class="w-6 h-6 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            "title": "Loan " + ("Repaid" if loan.status == "repaid" else "Borrowed"),
+            "details": f"{user.full_name} - {loan.amount} m³",
+            "timestamp": loan.repaid_at if loan.status == "repaid" else loan.borrowed_at
+        })
+
+    # Sort all activities by timestamp
     activities.sort(key=lambda x: x["timestamp"], reverse=True)
 
     return render_template("admin/activities.html", activities=activities)
@@ -528,117 +621,70 @@ def timeago(date):
 app.jinja_env.filters["timeago"] = timeago
 
 
-@app.route("/admin/counters", methods=["GET", "POST"])
+@app.route("/admin/counters")
 @login_required
 def manage_counters():
-    if request.method == "POST":
-        counter_id = request.form.get("counter_id")
-        new_counter = Counter(counter_id=counter_id)
-        db.session.add(new_counter)
-        db.session.commit()
-        return redirect(url_for("manage_counters"))
-
-    counters = Counter.query.all()
-
-    for counter in counters:
-        if counter.assigned_to:
-            user = User.query.filter_by(id_card=counter.assigned_to).first()
-            if user:
-                counter.full_name = user.full_name
-            else:
-                counter.full_name = None
-    return render_template("admin/manage_counters.html", counters=counters)
-
-
-@app.route("/admin/users")
-@login_required
-def admin_users():
+    # Check if user is admin
     admin = Admin.query.filter_by(id=current_user.id).first()
     if not admin:
-        return redirect(url_for("dashboard"))
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
 
-    users = User.query.all()
-    return render_template("admin/users.html", users=users)
+    # Get all counters with their assignments and latest readings
+    counters = Counter.query.all()
+    for counter in counters:
+        # Get assigned user if any
+        if counter.assigned_to:
+            user = User.query.filter_by(counter_id=counter.counter_id).first()
+            counter.assigned_user = user
+        else:
+            counter.assigned_user = None
 
+        # Get latest reading
+        latest_reading = WaterUsage.query.filter_by(counter_id=counter.id).order_by(WaterUsage.timestamp.desc()).first()
+        counter.latest_reading = latest_reading.usage_amount if latest_reading else None
+        counter.last_reading_time = latest_reading.timestamp if latest_reading else None
 
-@app.route("/admin/users/<int:user_id>/delete", methods=["DELETE"])
-@login_required
-def delete_user(user_id):
-    # Check if the current user is an Admin by querying the Admin table
-    admin = Admin.query.get(current_user.id)
-    if not admin:
-        return jsonify({"success": False, "message": "Unauthorized"}), 403
+        # Determine status
+        if not counter.assigned_to:
+            counter.display_status = "Unassigned"
+        elif counter.status == "active":
+            counter.display_status = "Active"
+        else:
+            counter.display_status = "Inactive"
 
-    user = User.query.get_or_404(user_id)
-
-    try:
-        # Delete related records
-        Payment.query.filter_by(user_id=user.id).delete()
-
-        if user.counter_id:
-            # Find water usage records associated with this counter
-            WaterUsage.query.filter_by(counter_id=user.counter_id).delete()
-
-        # Delete the user
-        db.session.delete(user)
-        db.session.commit()
-
-        return jsonify({"success": True, "message": "User deleted successfully"})
-    except Exception as e:
-        db.session.rollback()
-        print(f"Error deleting user: {str(e)}")
-        return jsonify({"success": False, "message": str(e)}), 500
+    return render_template("admin/counters.html", counters=counters)
 
 
 @app.route("/admin/water-usage")
 @login_required
 def water_usage_page():
-    # Get high consumption users with correct join fields
-    high_usage = (
-        db.session.query(
-            User.id,
-            User.full_name,
-            User.email,
-            func.sum(WaterUsage.usage_amount).label("total_usage"),
-            func.count(WaterUsage.id).label("reading_count"),
-        )
-        .select_from(WaterUsage)
-        .join(Counter, Counter.counter_id == WaterUsage.counter_id)
-        .join(User, User.counter_id == Counter.counter_id)
-        .filter(WaterUsage.usage_amount > 1000)
-        .group_by(User.id, User.full_name, User.email)
-        .all()
-    )
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        return redirect(url_for("dashboard"))
 
-    # Get average daily usage
-    avg_usage = (
-        WaterUsage.query.with_entities(func.avg(WaterUsage.usage_amount)).scalar() or 0
-    )
-
-    # Get total consumption
-    total_usage = (
-        WaterUsage.query.with_entities(func.sum(WaterUsage.usage_amount)).scalar() or 0
-    )
-
-    return render_template(
-        "admin/water_usage.html",
-        high_usage=high_usage,
-        avg_usage=avg_usage,
-        total_usage=total_usage,
-    )
+    # Get water usage data
+    usage_data = WaterUsage.query.order_by(WaterUsage.timestamp.desc()).all()
+    return render_template("admin/water_usage.html", usage_data=usage_data)
 
 
 @app.route("/admin/billing")
 @login_required
 def billing():
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
+
     # Get filter parameters
-    user_id = request.args.get("user_id")
+    user_id = request.args.get("user_id", type=int)
     status = request.args.get("status")
     date_from = request.args.get("date_from")
     date_to = request.args.get("date_to")
 
-    # Base query for payments with user information
-    query = db.session.query(Payment, User).join(User, Payment.user_id == User.id)
+    # Build query
+    query = Payment.query.join(User).order_by(Payment.timestamp.desc())
 
     # Apply filters
     if user_id:
@@ -646,36 +692,118 @@ def billing():
     if status:
         query = query.filter(Payment.status == status)
     if date_from:
-        query = query.filter(
-            Payment.timestamp >= datetime.strptime(date_from, "%Y-%m-%d")
-        )
+        query = query.filter(Payment.timestamp >= datetime.strptime(date_from, "%Y-%m-%d"))
     if date_to:
-        query = query.filter(
-            Payment.timestamp <= datetime.strptime(date_to, "%Y-%m-%d")
-        )
+        query = query.filter(Payment.timestamp <= datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1))
+
+    # Get paginated results
+    page = request.args.get("page", 1, type=int)
+    per_page = 20
+    payments = query.paginate(page=page, per_page=per_page, error_out=False)
 
     # Calculate statistics
-    revenue_query = query.filter(Payment.status == "success")
-    total_revenue = revenue_query.with_entities(func.sum(Payment.amount)).scalar() or 0
+    total_revenue = Payment.query.filter_by(status="success").with_entities(func.sum(Payment.amount)).scalar() or 0
+    pending_count = Payment.query.filter_by(status="pending").count()
+    pending_amount = Payment.query.filter_by(status="pending").with_entities(func.sum(Payment.amount)).scalar() or 0
 
-    pending_query = query.filter(Payment.status == "pending")
-    pending_amount = pending_query.with_entities(func.sum(Payment.amount)).scalar() or 0
-    pending_count = pending_query.count()
-
-    # Get recent invoices with user data
-    invoices = query.order_by(Payment.timestamp.desc()).limit(10).all()
-
-    # Get users for filter dropdown
-    users = User.query.all()
+    # Get all users for the filter dropdown
+    users = User.query.order_by(User.full_name).all()
 
     return render_template(
         "admin/billing.html",
-        total_revenue=total_revenue,
-        pending_amount=pending_amount,
-        pending_count=pending_count,
-        invoices=invoices,
+        payments=payments,
         users=users,
+        total_revenue=total_revenue,
+        pending_count=pending_count,
+        pending_amount=pending_amount,
     )
+
+@app.route("/admin/payments/add", methods=["POST"])
+@login_required
+def add_payment():
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        return jsonify({"success": False, "message": "Access denied"}), 403
+
+    try:
+        user_id = request.form.get("user_id", type=int)
+        amount = request.form.get("amount", type=float)
+        status = request.form.get("status")
+
+        if not all([user_id, amount, status]):
+            flash("Missing required fields", "error")
+            return redirect(url_for("billing"))
+
+        # Create new payment
+        payment = Payment(
+            user_id=user_id,
+            amount=amount,
+            status=status,
+            timestamp=datetime.utcnow(),
+        )
+        db.session.add(payment)
+        db.session.commit()
+
+        # If payment is successful, update user's balance
+        if status == "success":
+            user = User.query.get(user_id)
+            if user:
+                user.balance += amount
+                db.session.commit()
+
+                # Send notification if user has Pushover configured
+                if user.pushover_key:
+                    send_pushover_notification(
+                        user.pushover_key,
+                        "Payment Received",
+                        f"Your account has been credited with RWF {amount:,.2f}. New balance: RWF {user.balance:,.2f}",
+                    )
+
+        flash("Payment added successfully", "success")
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error adding payment: {str(e)}", "error")
+
+    return redirect(url_for("billing"))
+
+@app.route("/admin/payments/<int:payment_id>/status", methods=["POST"])
+@login_required
+def update_payment_status(payment_id):
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        return jsonify({"success": False, "message": "Access denied"}), 403
+
+    try:
+        payment = Payment.query.get_or_404(payment_id)
+        new_status = request.json.get("status")
+
+        if not new_status:
+            return jsonify({"success": False, "message": "Status is required"}), 400
+
+        # Update payment status
+        payment.status = new_status
+        db.session.commit()
+
+        # If payment is marked as successful, update user's balance
+        if new_status == "success" and payment.status != "success":
+            user = payment.user
+            user.balance += payment.amount
+            db.session.commit()
+
+            # Send notification if user has Pushover configured
+            if user.pushover_key:
+                send_pushover_notification(
+                    user.pushover_key,
+                    "Payment Received",
+                    f"Your account has been credited with RWF {payment.amount:,.2f}. New balance: RWF {user.balance:,.2f}",
+                )
+
+        return jsonify({"success": True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
 
 
 @app.route("/admin/view-invoice/<int:invoice_id>")
@@ -3048,37 +3176,123 @@ def retry_failed_reports(user_id):
 @login_required
 def admin_loans():
     # Check if the current user is an admin
-    admin = Admin.query.filter_by(id=current_user.id).first()
-    if not admin:
-        return redirect(url_for("dashboard"))
+    if not isinstance(current_user, Admin):
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("user_dashboard"))
 
-    # Get all loans with user information
-    loans = (
-        db.session.query(WaterLoan, User)
-        .join(User, WaterLoan.user_id == User.id)
-        .order_by(WaterLoan.borrowed_at.desc())
-        .all()
-    )
-
-    # Calculate statistics
-    active_loans = WaterLoan.query.filter_by(status="active").count()
-    total_borrowed = (
-        WaterLoan.query.with_entities(func.sum(WaterLoan.amount)).scalar() or 0
-    )
-    repaid_amount = (
-        WaterLoan.query.filter_by(status="repaid")
-        .with_entities(func.sum(WaterLoan.amount))
-        .scalar()
-        or 0
+    # Get all loans with pagination
+    page = request.args.get("page", 1, type=int)
+    per_page = 10
+    loans = WaterLoan.query.order_by(WaterLoan.borrowed_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
     )
 
-    return render_template(
-        "admin/loans.html",
-        loans=loans,
-        active_loans=active_loans,
-        total_borrowed=total_borrowed,
-        repaid_amount=repaid_amount,
+    return render_template("admin/loans.html", loans=loans)
+
+
+@app.route("/admin/recharges", methods=["GET", "POST"])
+@login_required
+def admin_recharges():
+    # Check if the current user is an admin
+    if not isinstance(current_user, Admin):
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("user_dashboard"))
+
+    if request.method == "POST":
+        user_id = request.form.get("user_id")
+        amount = float(request.form.get("amount", 0))
+        description = request.form.get("description", "")
+
+        user = User.query.get(user_id)
+        if not user:
+            flash("User not found.", "error")
+            return redirect(url_for("admin_recharges"))
+
+        # Create a new payment record for the recharge
+        payment = Payment(
+            user_id=user_id,
+            amount=amount,
+            status="completed",
+            transaction_type="recharge",
+            transaction_ref=f"RECHARGE_{int(time.time())}"
+        )
+        db.session.add(payment)
+
+        # Update user's balance
+        user.balance += amount
+
+        try:
+            db.session.commit()
+            flash(f"Successfully recharged {amount} RWF to user {user.full_name}", "success")
+            
+            # Send notification to user if they have Pushover configured
+            if user.pushover_key:
+                send_pushover_notification(
+                    user.pushover_key,
+                    "Account Recharged",
+                    f"Your account has been recharged with {amount} RWF. New balance: {user.balance} RWF"
+                )
+        except Exception as e:
+            db.session.rollback()
+            flash(f"Error processing recharge: {str(e)}", "error")
+
+        return redirect(url_for("admin_recharges"))
+
+    # Get all users for the dropdown
+    users = User.query.all()
+    # Get recharge history
+    page = request.args.get("page", 1, type=int)
+    per_page = 10
+    recharges = Payment.query.filter_by(transaction_type="recharge").order_by(Payment.timestamp.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
     )
+
+    return render_template("admin/recharges.html", users=users, recharges=recharges)
+
+
+@app.route("/isp/recharge", methods=["GET", "POST"])
+def isp_recharge():
+    if request.method == "POST":
+        phone_number = request.form.get("phone_number")
+        amount = float(request.form.get("amount", 0))
+        
+        # Find user by phone number
+        user = User.query.filter_by(phone_number=phone_number).first()
+        if not user:
+            flash("User not found. Please check the phone number.", "error")
+            return redirect(url_for("isp_recharge"))
+
+        # Create a new payment record for the recharge
+        payment = Payment(
+            user_id=user.id,
+            amount=amount,
+            status="completed",
+            transaction_type="recharge",
+            transaction_ref=f"ISP_RECHARGE_{int(time.time())}"
+        )
+        db.session.add(payment)
+
+        # Update user's balance
+        user.balance += amount
+
+        try:
+            db.session.commit()
+            flash(f"Successfully recharged {amount} RWF to user {user.full_name}", "success")
+            
+            # Send notification to user if they have Pushover configured
+            if user.pushover_key:
+                send_pushover_notification(
+                    user.pushover_key,
+                    "Account Recharged",
+                    f"Your account has been recharged with {amount} RWF. New balance: {user.balance} RWF"
+                )
+        except Exception as e:
+            db.session.rollback()
+            flash(f"Error processing recharge: {str(e)}", "error")
+
+        return redirect(url_for("isp_recharge"))
+
+    return render_template("isp/recharge.html")
 
 
 @app.route("/user/activate-account", methods=["GET", "POST"])
@@ -3245,6 +3459,143 @@ def get_water_flow(user_id):
     except Exception as e:
         print(f"Error getting water flow: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
+@app.template_filter("format_number")
+def format_number(value):
+    """Format number with thousand separators"""
+    try:
+        return "{:,.2f}".format(float(value))
+    except (ValueError, TypeError):
+        return "0.00"
+
+@app.route("/admin/counters/add", methods=["POST"])
+@login_required
+def add_counter():
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
+
+    try:
+        counter_id = request.form.get("counter_id")
+        if not counter_id:
+            flash("Counter ID is required.", "error")
+            return redirect(url_for("manage_counters"))
+
+        # Check if counter already exists
+        existing_counter = Counter.query.filter_by(counter_id=counter_id).first()
+        if existing_counter:
+            flash("Counter ID already exists.", "error")
+            return redirect(url_for("manage_counters"))
+
+        # Create new counter
+        new_counter = Counter(
+            counter_id=counter_id,
+            status="available"
+        )
+        db.session.add(new_counter)
+        db.session.commit()
+
+        flash("Counter added successfully.", "success")
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error adding counter: {str(e)}", "error")
+
+    return redirect(url_for("manage_counters"))
+
+@app.route("/admin/counters/assign", methods=["POST"])
+@login_required
+def assign_counter():
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
+
+    try:
+        counter_id = request.form.get("counter_id")
+        user_id = request.form.get("user_id")
+
+        if not counter_id or not user_id:
+            flash("Both counter ID and user ID are required.", "error")
+            return redirect(url_for("manage_counters"))
+
+        # Get counter and user
+        counter = Counter.query.filter_by(counter_id=counter_id).first()
+        user = User.query.get(user_id)
+
+        if not counter or not user:
+            flash("Counter or user not found.", "error")
+            return redirect(url_for("manage_counters"))
+
+        # Check if counter is already assigned
+        if counter.assigned_to:
+            flash("This counter is already assigned to a user.", "error")
+            return redirect(url_for("manage_counters"))
+
+        # Check if user already has a counter
+        if user.counter_id:
+            flash("This user already has a counter assigned.", "error")
+            return redirect(url_for("manage_counters"))
+
+        # Assign counter to user
+        counter.assigned_to = user_id
+        counter.status = "active"
+        user.counter_id = counter_id
+
+        # Initialize water balance for user if not exists
+        water_balance = UserWaterBalance.query.filter_by(user_id=user_id).first()
+        if not water_balance:
+            water_balance = UserWaterBalance(user_id=user_id, cubic_meters=0.0)
+            db.session.add(water_balance)
+
+        db.session.commit()
+        flash("Counter assigned successfully.", "success")
+
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error assigning counter: {str(e)}", "error")
+
+    return redirect(url_for("manage_counters"))
+
+@app.route("/admin/water-usage/add", methods=["POST"])
+@login_required
+def add_reading():
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
+
+    try:
+        counter_id = request.form.get("counter_id")
+        usage_amount = float(request.form.get("usage_amount", 0))
+
+        if not counter_id or usage_amount <= 0:
+            flash("Invalid counter ID or usage amount.", "error")
+            return redirect(url_for("water_usage_page"))
+
+        # Get counter
+        counter = Counter.query.filter_by(counter_id=counter_id).first()
+        if not counter:
+            flash("Counter not found.", "error")
+            return redirect(url_for("water_usage_page"))
+
+        # Create new reading
+        new_reading = WaterUsage(
+            counter_id=counter.id,
+            usage_amount=usage_amount
+        )
+        db.session.add(new_reading)
+        db.session.commit()
+
+        flash("Water usage reading added successfully.", "success")
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error adding reading: {str(e)}", "error")
+
+    return redirect(url_for("water_usage_page"))
 
 if __name__ == "__main__":
     with app.app_context():
