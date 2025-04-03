@@ -870,19 +870,21 @@ def login():
 
 
 def initialize_water_balance(user_id):
-    """
-    Initialize water balance for a new user
-    """
-    # Check if balance already exists
-    existing = WaterBalance.query.filter_by(user_id=user_id).first()
-    if existing:
-        return existing
-
-    # Create new balance record
-    new_balance = WaterBalance(user_id=user_id, cubic_meters=0.0)
-    db.session.add(new_balance)
-    db.session.commit()
-    return new_balance
+    """Initialize water balance for a new user"""
+    try:
+        # Check if balance already exists
+        existing = UserWaterBalance.query.filter_by(user_id=user_id).first()
+        if not existing:
+            # Create new water balance
+            water_balance = UserWaterBalance(
+                user_id=user_id,
+                cubic_meters=0.0
+            )
+            db.session.add(water_balance)
+            db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error initializing water balance: {str(e)}")
 
 
 @app.route("/register", methods=["GET", "POST"])
@@ -3253,44 +3255,64 @@ def admin_recharges():
 @app.route("/isp/recharge", methods=["GET", "POST"])
 def isp_recharge():
     if request.method == "POST":
-        phone_number = request.form.get("phone_number")
-        amount = float(request.form.get("amount", 0))
-        
-        # Find user by phone number
-        user = User.query.filter_by(phone_number=phone_number).first()
-        if not user:
-            flash("User not found. Please check the phone number.", "error")
-            return redirect(url_for("isp_recharge"))
-
-        # Create a new payment record for the recharge
-        payment = Payment(
-            user_id=user.id,
-            amount=amount,
-            status="completed",
-            transaction_type="recharge",
-            transaction_ref=f"ISP_RECHARGE_{int(time.time())}"
-        )
-        db.session.add(payment)
-
-        # Update user's balance
-        user.balance += amount
-
         try:
-            db.session.commit()
-            flash(f"Successfully recharged {amount} RWF to user {user.full_name}", "success")
-            
-            # Send notification to user if they have Pushover configured
+            user_id = request.form.get("user_id")
+            amount = float(request.form.get("amount", 0))
+
+            if not user_id or amount <= 0:
+                flash("Invalid user or amount.", "error")
+                return redirect(url_for("isp_recharge"))
+
+            # Get user
+            user = User.query.get(user_id)
+            if not user:
+                flash("User not found.", "error")
+                return redirect(url_for("isp_recharge"))
+
+            # Get or create user's account
+            account = Account.query.filter_by(user_id=user.id).first()
+            if not account:
+                # Generate a unique account number
+                account_number = f"ACC{int(datetime.utcnow().timestamp())}"
+                account = Account(
+                    user_id=user.id,
+                    account_number=account_number,
+                    balance=0.0,
+                    status="active"
+                )
+                db.session.add(account)
+
+            # Create payment record
+            payment = Payment(
+                user_id=user.id,
+                amount=amount,
+                status="success",
+                transaction_type="recharge",
+                transaction_ref=f"ISP_RECHARGE_{int(datetime.utcnow().timestamp())}"
+            )
+            db.session.add(payment)
+
+            # Update account balance
+            account.balance = float(account.balance) + amount
+            account.last_transaction = datetime.utcnow()
+
+            # Send notification if Pushover key is configured
             if user.pushover_key:
                 send_pushover_notification(
                     user.pushover_key,
                     "Account Recharged",
-                    f"Your account has been recharged with {amount} RWF. New balance: {user.balance} RWF"
+                    f"Your account has been recharged with RWF {amount:,.2f}. New balance: RWF {account.balance:,.2f}",
+                    priority=0
                 )
+
+            db.session.commit()
+            flash(f"Successfully recharged RWF {amount:,.2f} to user {user.full_name}. New balance: RWF {account.balance:,.2f}", "success")
+            return redirect(url_for("isp_recharge"))
+
         except Exception as e:
             db.session.rollback()
             flash(f"Error processing recharge: {str(e)}", "error")
-
-        return redirect(url_for("isp_recharge"))
+            return redirect(url_for("isp_recharge"))
 
     return render_template("isp/recharge.html")
 
@@ -3596,6 +3618,33 @@ def add_reading():
         flash(f"Error adding reading: {str(e)}", "error")
 
     return redirect(url_for("water_usage_page"))
+
+@app.route("/api/search-users")
+def search_users():
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify([])
+    
+    # Search by phone number, ID card, or full name
+    users = User.query.filter(
+        db.or_(
+            User.phone_number.ilike(f'%{query}%'),
+            User.id_card.ilike(f'%{query}%'),
+            User.full_name.ilike(f'%{query}%')
+        )
+    ).limit(10).all()
+    
+    results = []
+    for user in users:
+        results.append({
+            'id': user.id,
+            'full_name': user.full_name,
+            'phone_number': user.phone_number or '',
+            'id_card': user.id_card,
+            'counter_id': user.counter_id or ''
+        })
+    
+    return jsonify(results)
 
 if __name__ == "__main__":
     with app.app_context():
