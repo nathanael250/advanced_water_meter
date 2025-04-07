@@ -2124,7 +2124,7 @@ def api_valve_control():
             
         # Update valve status in database
         if action == "open":
-            counter.status = "open"
+            counter.status = "opened"
             success = True
             message = "Valve opened successfully"
         elif action == "close":
@@ -2583,9 +2583,12 @@ def search_users():
     
     return jsonify(results)
 
+def test():
+    pass
 
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
     app.run(debug=True, host="0.0.0.0", port=5000)
 
+#final
