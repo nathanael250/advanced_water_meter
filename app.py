@@ -39,6 +39,10 @@ from datetime import datetime, timedelta
 
 import http.client
 import urllib.parse
+import random
+import string
+import secrets
+from werkzeug.security import generate_password_hash
 
 
 app = Flask(__name__)
@@ -123,10 +127,18 @@ class User(db.Model, UserMixin):
     registration_date = db.Column(db.DateTime, default=datetime.utcnow)
     phone_number = db.Column(db.String(20), nullable=True)
     pushover_key = db.Column(db.String(30), nullable=True)
-    credit_limit = db.Column(
-        db.Float, default=1.0
-    )  # Default credit limit in cubic meters
     balance = db.Column(db.Float, default=0.0)  # Add this field
+    reset_token = db.Column(db.String(100), unique=True, nullable=True)
+    reset_token_expiry = db.Column(db.DateTime, nullable=True)
+
+    def __repr__(self):
+        return f"<User {self.full_name}>"
+
+    def generate_reset_token(self):
+        self.reset_token = secrets.token_urlsafe(32)
+        self.reset_token_expiry = datetime.utcnow() + timedelta(hours=1)
+        db.session.commit()
+        return self.reset_token
 
 
 class WaterUsage(db.Model):
@@ -433,7 +445,6 @@ def admin_users():
 
     # Get filter parameters
     search = request.args.get("search", "")
-    status = request.args.get("status", "")
 
     # Build query
     query = User.query
@@ -448,15 +459,13 @@ def admin_users():
                 User.id_card.ilike(f"%{search}%")
             )
         )
-    if status:
-        query = query.filter(User.status == status)
 
     # Get paginated results
     page = request.args.get("page", 1, type=int)
     per_page = 20
     users = query.order_by(User.registration_date.desc()).paginate(page=page, per_page=per_page, error_out=False)
 
-    return render_template("admin/users.html", users=users, search=search, status=status)
+    return render_template("admin/users.html", users=users, search=search)
 
 @app.route("/admin/users/<int:user_id>/status", methods=["POST"])
 @login_required
@@ -475,30 +484,6 @@ def update_user_status(user_id):
 
         # Update user status
         user.status = new_status
-        db.session.commit()
-
-        return jsonify({"success": True})
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"success": False, "message": str(e)}), 500
-
-@app.route("/admin/users/<int:user_id>/credit-limit", methods=["POST"])
-@login_required
-def update_credit_limit(user_id):
-    # Check if user is admin
-    admin = Admin.query.filter_by(id=current_user.id).first()
-    if not admin:
-        return jsonify({"success": False, "message": "Access denied"}), 403
-
-    try:
-        user = User.query.get_or_404(user_id)
-        new_limit = request.json.get("credit_limit", type=float)
-
-        if new_limit is None:
-            return jsonify({"success": False, "message": "Credit limit is required"}), 400
-
-        # Update credit limit
-        user.credit_limit = new_limit
         db.session.commit()
 
         return jsonify({"success": True})
@@ -2583,9 +2568,133 @@ def search_users():
     
     return jsonify(results)
 
+def test():
+    pass
+
+@app.route("/admin/users/<int:user_id>/reset-password", methods=["POST"])
+@login_required
+def reset_user_password(user_id):
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        return jsonify({"success": False, "message": "Access denied"}), 403
+
+    try:
+        user = User.query.get_or_404(user_id)
+        # Generate a random password
+        new_password = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+        user.password = new_password
+        db.session.commit()
+
+        return jsonify({
+            "success": True,
+            "new_password": new_password
+        })
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "message": str(e)}), 500
+
+def add_status_column():
+    """Add status column to user table"""
+    try:
+        # Add status column with default value 'active'
+        db.engine.execute("ALTER TABLE user ADD COLUMN status VARCHAR(20) DEFAULT 'active'")
+        print("Successfully added status column to user table")
+    except Exception as e:
+        print(f"Error adding status column: {str(e)}")
+
+@app.route("/admin/users/<int:user_id>/details")
+@login_required
+def user_details(user_id):
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
+
+    # Get user details
+    user = User.query.get_or_404(user_id)
+    
+    # Get water usage history
+    water_usage = WaterUsage.query.filter_by(counter_id=user.counter_id).order_by(WaterUsage.timestamp.desc()).all()
+    
+    # Get payment history
+    payments = Payment.query.filter_by(user_id=user.id).order_by(Payment.timestamp.desc()).all()
+    
+    # Get loan history
+    loans = WaterLoan.query.filter_by(user_id=user.id).order_by(WaterLoan.borrowed_at.desc()).all()
+
+    return render_template(
+        "admin/user_details.html",
+        user=user,
+        water_usage=water_usage,
+        payments=payments,
+        loans=loans
+    )
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    if request.method == "POST":
+        email = request.form.get("email")
+        user = User.query.filter_by(email=email).first()
+        
+        if user:
+            # If user has Pushover key configured, send password reminder
+            if user.pushover_key:
+                send_pushover_notification(
+                    user.pushover_key,
+                    "Password Reminder",
+                    f"Hello {user.full_name}, your password is: {user.password}",
+                    priority=1
+                )
+                flash("Your password has been sent to your device via Pushover.", "success")
+            else:
+                flash("You don't have Pushover notifications configured. Please contact support.", "error")
+            return redirect(url_for("login"))
+        
+        flash("No account found with that email address.", "error")
+        return redirect(url_for("forgot_password"))
+    
+    return render_template("auth/forgot_password.html")
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    user = User.query.filter_by(reset_token=token).first()
+    
+    if not user or not user.reset_token_expiry or user.reset_token_expiry < datetime.utcnow():
+        flash("Invalid or expired password reset link.", "error")
+        return redirect(url_for("forgot_password"))
+    
+    if request.method == "POST":
+        password = request.form.get("password")
+        confirm_password = request.form.get("confirm_password")
+        
+        if not password or not confirm_password:
+            flash("Please fill in all fields.", "error")
+            return redirect(url_for("reset_password", token=token))
+        
+        if password != confirm_password:
+            flash("Passwords do not match.", "error")
+            return redirect(url_for("reset_password", token=token))
+        
+        # Update password with hashing
+        user.password = generate_password_hash(password)
+        user.reset_token = None
+        user.reset_token_expiry = None
+        db.session.commit()
+        
+        flash("Your password has been reset successfully. Please login with your new password.", "success")
+        return redirect(url_for("login"))
+    
+    # Pass the token to the template for the form action
+    return render_template("auth/reset_password.html", token=token)
 
 if __name__ == "__main__":
     with app.app_context():
+        # Create all tables
         db.create_all()
-    app.run(debug=True, host="0.0.0.0", port=5000)
+        # Add status column if it doesn't exist
+        add_status_column()
+        app.run(debug=True)
 
+#final

@@ -29,15 +29,6 @@
                            class="mt-1 block w-full px-2 py-2 focus:outline-none rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500"
                            placeholder="Search by name, email, phone...">
                 </div>
-                <!-- <div>
-                    <label class="block text-sm font-medium text-gray-700">Status</label>
-                    <select name="status" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                        <option value="">All Status</option>
-                        <option value="active" {% if status == 'active' %}selected{% endif %}>Active</option>
-                        <option value="suspended" {% if status == 'suspended' %}selected{% endif %}>Suspended</option>
-                        <option value="inactive" {% if status == 'inactive' %}selected{% endif %}>Inactive</option>
-                    </select>
-                </div> -->
                 <div class="flex items-end md:col-span-1">
                     <button type="submit" class="w-full bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700">
                         Search
@@ -67,9 +58,6 @@
                             Credit Limit
                         </th>
                         <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                            Status
-                        </th>
-                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                             Actions
                         </th>
                     </tr>
@@ -94,7 +82,7 @@
                         <td class="px-6 py-4 whitespace-nowrap">
                             <div class="flex items-center">
                                 <span class="text-sm text-gray-500 mr-2">{{ user.credit_limit }} m³</span>
-                                <button onclick="openCreditLimitModal('{{ user.id }}', {{ user.credit_limit }})"
+                                <button onclick="openCreditLimitModal('{{ user.id }}', '{{ user.credit_limit }}')"
                                         class="text-blue-600 hover:text-blue-900">
                                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
@@ -102,20 +90,9 @@
                                 </button>
                             </div>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <select onchange="updateUserStatus('{{ user.id }}', this.value)"
-                                    class="text-sm rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500">
-                                <option value="active" {% if user.status == 'active' %}selected{% endif %}>Active</option>
-                                <option value="suspended" {% if user.status == 'suspended' %}selected{% endif %}>Suspended</option>
-                                <option value="inactive" {% if user.status == 'inactive' %}selected{% endif %}>Inactive</option>
-                            </select>
-                        </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                            <button onclick="viewUserDetails('{{ user.id }}')" class="text-blue-600 hover:text-blue-900 mr-3">
+                            <button onclick="viewUserDetails('{{ user.id }}')" class="text-blue-600 hover:text-blue-900">
                                 View
-                            </button>
-                            <button onclick="resetUserPassword('{{ user.id }}')" class="text-yellow-600 hover:text-yellow-900">
-                                Reset Password
                             </button>
                         </td>
                     </tr>
@@ -129,7 +106,7 @@
         <div class="mt-4 flex justify-center">
             <nav class="relative z-0 inline-flex rounded-md shadow-sm -space-x-px" aria-label="Pagination">
                 {% if users.has_prev %}
-                <a href="{{ url_for('admin_users', page=users.prev_num, search=search, status=status) }}"
+                <a href="{{ url_for('admin_users', page=users.prev_num, search=search) }}"
                    class="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
                     Previous
                 </a>
@@ -137,7 +114,7 @@
 
                 {% for page in users.iter_pages() %}
                     {% if page %}
-                        <a href="{{ url_for('admin_users', page=page, search=search, status=status) }}"
+                        <a href="{{ url_for('admin_users', page=page, search=search) }}"
                            class="relative inline-flex items-center px-4 py-2 border border-gray-300 bg-white text-sm font-medium {% if page == users.page %}text-blue-600 bg-blue-50{% else %}text-gray-700 hover:bg-gray-50{% endif %}">
                             {{ page }}
                         </a>
@@ -149,7 +126,7 @@
                 {% endfor %}
 
                 {% if users.has_next %}
-                <a href="{{ url_for('admin_users', page=users.next_num, search=search, status=status) }}"
+                <a href="{{ url_for('admin_users', page=users.next_num, search=search) }}"
                    class="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50">
                     Next
                 </a>
@@ -224,40 +201,8 @@ document.getElementById('creditLimitForm').addEventListener('submit', function(e
     });
 });
 
-function updateUserStatus(userId, status) {
-    if (confirm('Are you sure you want to update the user status?')) {
-        fetch(`/admin/users/${userId}/status`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ status: status }),
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                location.reload();
-            } else {
-                alert('Failed to update user status: ' + data.message);
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            alert('An error occurred while updating the user status');
-        });
-    }
-}
-
 function viewUserDetails(userId) {
-    // Implement user details view
-    alert('User details view will be implemented');
-}
-
-function resetUserPassword(userId) {
-    if (confirm('Are you sure you want to reset this user\'s password?')) {
-        // Implement password reset
-        alert('Password reset will be implemented');
-    }
+    window.location.href = `/admin/users/${userId}/details`;
 }
 </script>
 {% endblock %}
