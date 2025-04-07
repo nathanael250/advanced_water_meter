@@ -122,7 +122,7 @@ class User(db.Model, UserMixin):
 
 class WaterUsage(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    counter_id = db.Column(db.String(50), db.ForeignKey("counter.counter_id"), nullable=False)
+    counter_id = db.Column(db.Integer, db.ForeignKey("counter.id"), nullable=False)
     usage_amount = db.Column(db.Float, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     acknowledged = db.Column(db.Boolean, default=False)
@@ -147,13 +147,13 @@ class Payment(db.Model):
 class ValveOperation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
-    counter_id = db.Column(db.String(50), db.ForeignKey("counter.counter_id"), nullable=False)
-    action = db.Column(db.String(20), nullable=False)  # 'open' or 'close'
+    operation = db.Column(db.String(20), nullable=False)  # 'open' or 'close'
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    duration = db.Column(db.Integer, nullable=True)  # Duration in seconds if action is 'close'
+    duration = db.Column(
+        db.Integer, nullable=True
+    )  # Duration in seconds if operation is 'close'
 
     user = db.relationship("User", backref="valve_operations")
-    counter = db.relationship("Counter", backref="valve_operations")
 
 
 class WaterLoan(db.Model):
@@ -1182,7 +1182,7 @@ def user_dashboard():
         .first()
     )
 
-    valve_status = latest_valve_op.action if latest_valve_op else "closed"
+    valve_status = latest_valve_op.operation if latest_valve_op else "closed"
 
     # Get water balance with improved error handling
     try:
@@ -1282,29 +1282,6 @@ def number_format(value):
         return "0.00"
     return "{:,.2f}".format(float(value))
 
-@app.route('/api/get-water-balance/<int:user_id>')
-def get_water_balance(user_id):
-    try:
-        # Get the user's water balance
-        water_balance = WaterBalance.query.filter_by(user_id=user_id).first()
-        
-        if water_balance:
-            return jsonify({
-                'success': True,
-                'balance': water_balance.balance,
-                'last_updated': water_balance.last_updated.isoformat()
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'message': 'No water balance found'
-            }), 404
-            
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': str(e)
-        }), 500
 
 @app.route("/user/consumption")
 @login_required
@@ -2010,51 +1987,22 @@ def admin_send_notification():
 @app.route("/api/valve-control", methods=["POST"])
 @login_required
 def api_valve_control():
-    try:
-        action = request.json.get("action")
-        counter_id = request.json.get("counter_id")
-        
-        if not counter_id:
-            return jsonify({"success": False, "message": "Counter ID is required"}), 400
-            
-        # Find the counter
-        counter = Counter.query.filter_by(counter_id=counter_id).first()
-        if not counter:
-            return jsonify({"success": False, "message": "Counter not found"}), 404
-            
-        # Update valve status in database
-        if action == "open":
-            counter.status = "open"
-            success = True
-            message = "Valve opened successfully"
-        elif action == "close":
-            counter.status = "closed"
-            success = True
-            message = "Valve closed successfully"
-        else:
-            return jsonify({"success": False, "message": "Invalid action"}), 400
-            
-        db.session.commit()
-        
-        # Log the valve operation
-        valve_op = ValveOperation(
-            counter_id=counter.id,
-            action=action,
-            timestamp=datetime.utcnow()
-        )
-        db.session.add(valve_op)
-        db.session.commit()
-        
-        return jsonify({
-            "success": success,
-            "message": message,
-            "status": action,
-            "counter_id": counter_id
-        })
-        
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({"success": False, "message": str(e)}), 500
+    action = request.json.get("action")
+    success = False
+    message = "Invalid action"
+
+    if action == "open":
+        # Code to open the valve (in production, this would call your IoT API)
+        success = True
+        message = "Valve opened successfully"
+    elif action == "close":
+        # Code to close the valve (in production, this would call your IoT API)
+        success = True
+        message = "Valve closed successfully"
+
+    # In a real implementation, you might want to log this action
+    return jsonify({"success": success, "message": message, "status": action})
+
 
 @app.route("/api/check-balance/<user_id>", methods=["GET"])
 def check_balance(user_id):
@@ -2116,233 +2064,1659 @@ def check_balance(user_id):
 @app.route('/user/valve-control', methods=['GET', 'POST'])
 @login_required
 def valve_control():
-    try:
-        if request.method == 'POST':
-            action = request.form.get('action')
-            if action in ['open', 'close']:
-                # Get the user's counter
-                counter = Counter.query.filter_by(counter_id=current_user.counter_id).first()
-                if counter:
-                    # Create new valve operation
-                    valve_op = ValveOperation(
-                        user_id=current_user.id,
-                        counter_id=counter.counter_id,
-                        action=action,
-                        timestamp=datetime.utcnow()
-                    )
-                    db.session.add(valve_op)
-                    
-                    # Update counter status
-                    counter.status = action
-                    db.session.commit()
-                    
-                    flash(f'Valve {action}ed successfully', 'success')
-                    return redirect(url_for('valve_control'))  # Redirect back to the same page
-                else:
-                    flash('No counter assigned to your account', 'error')
-            else:
-                flash('Invalid action', 'error')
-        
-        # Get current status
-        counter = Counter.query.filter_by(counter_id=current_user.counter_id).first()
-        water_balance = UserWaterBalance.query.filter_by(user_id=current_user.id).first()
-        
-        if not water_balance:
-            water_balance = UserWaterBalance(user_id=current_user.id, cubic_meters=0.0)
-            db.session.add(water_balance)
-            db.session.commit()
-        
-        return render_template('user/valve_control.html', 
-                            valve_status=counter.status if counter else 'closed',
-                            remaining_balance=water_balance.cubic_meters,
-                            has_balance=water_balance.cubic_meters > 0)
-        
-    except Exception as e:
-        print(f"Error in valve_control: {str(e)}")
-        flash('An error occurred while accessing valve control', 'error')
-        return redirect(url_for('user_dashboard'))
-
-
-@app.route('/borrow-water', methods=['GET', 'POST'])
-@login_required
-def borrow_water():
+    # Get the current valve status from the latest operation
+    latest_operation = ValveOperation.query.filter_by(user_id=current_user.id).order_by(ValveOperation.timestamp.desc()).first()
+    valve_status = latest_operation.operation if latest_operation else 'closed'
+    
+    # Calculate current water balance from all successful payments minus usage
+    total_payments = Payment.query.filter_by(
+        user_id=current_user.id, 
+        status='success',
+        transaction_type='payment'
+    ).with_entities(func.sum(Payment.amount)).scalar() or 0
+    
+    # Convert total payments to cubic meters
+    total_cubic_meters = total_payments / 1000  # Assuming 1000 RWF = 1 cubic meter
+    
+    # Get total water usage
+    total_usage = 0
+    if current_user.counter_id:
+        total_usage = WaterUsage.query.filter_by(
+            counter_id=current_user.counter_id
+        ).with_entities(func.sum(WaterUsage.usage_amount)).scalar() or 0
+    
+    # Calculate current water balance
+    remaining_water = max(0, total_cubic_meters - total_usage)
+    has_balance = remaining_water > 0
+    
+    # Debug logging
+    logger.info(f"User {current_user.id} valve control:")
+    logger.info(f"Total payments: {total_payments} RWF = {total_cubic_meters} cubic meters")
+    logger.info(f"Total usage: {total_usage} cubic meters")
+    logger.info(f"Current water balance: {remaining_water} cubic meters")
+    logger.info(f"Has balance: {has_balance}")
+    
     if request.method == 'POST':
-        amount = float(request.form.get('amount', 0))
-        terms = request.form.get('terms') == 'on'
+        action = request.form.get('action')
         
-        if not terms:
-            flash('You must agree to the terms and conditions', 'error')
-            return redirect(url_for('borrow_water'))
-            
-        if amount <= 0 or amount > 2:
-            flash('Amount must be between 0.1 and 2 cubic meters', 'error')
-            return redirect(url_for('borrow_water'))
-            
-        # Check if user already has an active loan
-        active_loan = WaterLoan.query.filter_by(
-            user_id=current_user.id,
-            status='active'
-        ).first()
-        
-        if active_loan:
-            flash('You already have an active loan', 'error')
-            return redirect(url_for('borrow_water'))
-            
-        try:
-            # Create new loan
-            loan = WaterLoan(
-                user_id=current_user.id,
-                amount=amount,
-                status='active',
-                borrowed_at=datetime.utcnow()
-            )
-            
-            db.session.add(loan)
+        if action == 'open':
+            if has_balance:
+                # Record valve operation in database
+                new_operation = ValveOperation(user_id=current_user.id, operation='open')
+                db.session.add(new_operation)
+                db.session.commit()
+                
+                valve_status = 'open'
+                flash('Valve opened successfully. Water is now flowing.', 'success')
+                
+                # Send notification to the user
+                if current_user.pushover_key:
+                    send_pushover_notification(
+                        current_user.pushover_key,
+                        "Valve Opened",
+                        f"Hello {current_user.full_name}, your water valve has been opened. Water is now flowing."
+                    )
+            else:
+                flash('Insufficient balance to open valve. Please recharge your account.', 'error')
+                
+        elif action == 'close':
+            # Record valve operation in database
+            new_operation = ValveOperation(user_id=current_user.id, operation='close')
+            db.session.add(new_operation)
             db.session.commit()
-            flash(f'Successfully borrowed {amount} cubic meters of water', 'success')
-            return redirect(url_for('borrow_water'))
-        except Exception as e:
-            db.session.rollback()
-            flash('An error occurred while processing your loan', 'error')
-            return redirect(url_for('borrow_water'))
+            
+            valve_status = 'closed'
+            flash('Valve closed successfully. Water flow has stopped.', 'success')
+            
+            # Send notification to the user
+            if current_user.pushover_key:
+                send_pushover_notification(
+                    current_user.pushover_key,
+                    "Valve Closed",
+                    f"Hello {current_user.full_name}, your water valve has been closed. Water flow has stopped."
+                )
+        
+        return redirect(url_for('valve_control'))
     
-    # GET request - show borrow water page
-    active_loan = WaterLoan.query.filter_by(
-        user_id=current_user.id,
-        status='active'
-    ).first()
+    # Get recent water usage
+    recent_usage = WaterUsage.query.filter_by(
+        counter_id=current_user.counter_id
+    ).order_by(WaterUsage.timestamp.desc()).limit(5).all()
     
-    loan_history = WaterLoan.query.filter_by(
-        user_id=current_user.id
-    ).order_by(WaterLoan.borrowed_at.desc()).all()
-    
-    return render_template('user/borrow_water.html',
-                         active_loan=active_loan,
-                         loan_history=loan_history)
+    return render_template('user/valve_control.html', 
+                          valve_status=valve_status,
+                          has_balance=has_balance,
+                          remaining_water=remaining_water,
+                          recent_usage=recent_usage)
 
-@app.route("/api/update-status/<user_id>", methods=["POST"])
-def update_status(user_id):
+
+@app.route("/api/update-valve/<user_id>", methods=["POST"])
+def update_valve(user_id):
+    """
+    API endpoint to update valve status from web interface
+    """
+    data = request.json
+    action = data.get("action")
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    if action not in ["open", "close"]:
+        return jsonify({"error": "Invalid action"}), 400
+
+    # In a real implementation, you would send a command to the NodeMCU
+    # For now, we'll just return success
+
+    # Log the action
+    new_operation = ValveOperation(user_id=user.id, operation=action)
+    db.session.add(new_operation)
+    db.session.commit()
+
+    return (
+        jsonify(
+            {"success": True, "message": f"Valve {action} command sent successfully"}
+        ),
+        200,
+    )
+
+
+@app.route("/api/record-usage", methods=["POST"])
+def record_usage():
+    """
+    API endpoint for NodeMCU to record water usage
+    Expects: user_id, usage_amount (in cubic meters)
+    """
+    data = request.json
+    user_id = data.get("user_id")
+    usage_amount = data.get("usage_amount")
+
+    if not user_id or not usage_amount:
+        return jsonify({"error": "Missing required parameters"}), 400
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    # Create a new water usage record
     try:
-        data = request.json
-        counter_id = data.get("counter_id")
-        valve_status = data.get("valve_status")
-        remaining_turns = data.get("remaining_turns")
-        current_usage = data.get("current_usage")
-        
-        if not all([counter_id, valve_status]):
-            return jsonify({"error": "Missing required fields"}), 400
-            
-        counter = Counter.query.filter_by(counter_id=counter_id).first()
-        if not counter:
-            return jsonify({"error": "Counter not found"}), 404
-            
-        # Update counter status
-        previous_status = counter.status
-        counter.status = valve_status
-        
-        # If valve is being closed, record the usage
-        if previous_status == "open" and valve_status == "closed" and current_usage and current_usage > 0:
-            usage = WaterUsage(
-                counter_id=counter_id,
-                usage_amount=current_usage,
-                timestamp=datetime.utcnow()
-            )
-            db.session.add(usage)
-            
-            # Update water balance
-            water_balance = UserWaterBalance.query.filter_by(user_id=user_id).first()
-            if water_balance:
-                water_balance.cubic_meters = max(0, water_balance.cubic_meters - current_usage)
-                water_balance.last_updated = datetime.utcnow()
-        
-        # Log the valve operation
-        valve_op = ValveOperation(
-            user_id=user_id,
-            counter_id=counter_id,
-            action=valve_status,
-            timestamp=datetime.utcnow()
+        new_usage = WaterUsage(
+            counter_id=user.counter_id, usage_amount=float(usage_amount)
         )
-        db.session.add(valve_op)
-        
+        db.session.add(new_usage)
+
+        # Deduct from water balance
+        water_balance = WaterBalance.query.filter_by(user_id=user.id).first()
+        if water_balance:
+            water_balance.cubic_meters = max(
+                0, water_balance.cubic_meters - float(usage_amount)
+            )
+            water_balance.last_updated = datetime.utcnow()
+
         db.session.commit()
-        
-        return jsonify({
-            "success": True,
-            "message": "Status updated successfully",
-            "status": valve_status,
-            "remaining_balance": water_balance.cubic_meters if water_balance else 0
-        }), 200
-        
+
+        # Send notification if usage is high
+        if (
+            float(usage_amount) > 0.5 and user.pushover_key
+        ):  # 0.5 cubic meters threshold
+            send_pushover_notification(
+                user.pushover_key,
+                "High Water Usage Alert",
+                f"Hello {user.full_name}, we detected high water usage of {usage_amount} cubic meters. Please check for leaks.",
+            )
+
+        return jsonify({"success": True, "message": "Usage recorded successfully"}), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
 
-@app.route("/api/get-valve-status/<user_id>", methods=["GET"])
-def get_valve_status(user_id):
+
+@app.route("/api/check-payment/<user_id>", methods=["GET"])
+def check_payment(user_id):
+    """
+    API endpoint for NodeMCU to check for new payments
+    Returns amount_paid in RWF if a new payment is found
+    """
+    try:
+        counter_id = request.args.get("counter_id")
+
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # If counter_id is provided, verify it matches the user's counter
+        if counter_id and user.counter_id != counter_id:
+            print(
+                f"Warning: Counter ID mismatch. User has {user.counter_id}, device sent {counter_id}"
+            )
+            # Optionally update the user's counter_id
+            user.counter_id = counter_id
+            db.session.commit()
+            print(f"Updated user {user_id} to use counter {counter_id}")
+
+        # Get the latest pending payment
+        latest_payment = (
+            Payment.query.filter_by(user_id=user.id, status="pending")
+            .order_by(Payment.timestamp.desc())
+            .first()
+        )
+
+        if not latest_payment:
+            return jsonify({"amount_paid": 0}), 200
+
+        # Mark the payment as processed
+        latest_payment.status = "success"
+        db.session.commit()
+
+        return jsonify({"amount_paid": latest_payment.amount}), 200
+    except Exception as e:
+        print(f"Error checking payment: {str(e)}")
+        return (
+            jsonify({"error": str(e)}),
+            500,
+        )  # The send-notification endpoint is already implemented in your code
+
+
+# But let's enhance it to work better with the NodeMCU
+
+
+@app.route("/api/valve-status/<user_id>", methods=["POST"])
+def update_valve_status(user_id):
+    """
+    API endpoint to update valve status from NodeMCU
+    """
+    try:
+        data = request.json
+        status = data.get("status")
+        counter_id = data.get("counter_id")
+        flow_rate = data.get("flow_rate", 0.2)  # Default flow rate in liters per second
+
+        print(
+            f"NodeMCU updating valve status for user {user_id}, counter {counter_id}: {status}"
+        )
+
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        if status not in ["open", "close"]:
+            return jsonify({"error": "Invalid status"}), 400
+
+        # If counter_id is provided, verify it matches the user's counter
+        if counter_id and user.counter_id != counter_id:
+            print(
+                f"Warning: Counter ID mismatch. User has {user.counter_id}, device sent {counter_id}"
+            )
+            user.counter_id = counter_id
+            db.session.commit()
+
+        # Get current water balance
+        water_balance = UserWaterBalance.query.filter_by(user_id=user.id).first()
+        if not water_balance:
+            water_balance = UserWaterBalance(user_id=user.id, cubic_meters=0.0)
+            db.session.add(water_balance)
+            db.session.commit()
+
+        # If valve is being closed, calculate and record usage
+        if status == "close":
+            # Get the last valve open operation
+            last_open = ValveOperation.query.filter_by(
+                user_id=user.id, operation="open"
+            ).order_by(ValveOperation.timestamp.desc()).first()
+
+            if last_open:
+                # Calculate time elapsed since valve was opened
+                time_elapsed = (datetime.utcnow() - last_open.timestamp).total_seconds()
+                
+                # Calculate usage in cubic meters (flow_rate is in liters/second)
+                usage_amount = (flow_rate * time_elapsed) / 1000  # Convert to cubic meters
+                
+                # Create water usage record
+                new_usage = WaterUsage(
+                    counter_id=user.counter_id,
+                    usage_amount=usage_amount
+                )
+                db.session.add(new_usage)
+                
+                # Update water balance
+                water_balance.cubic_meters = max(0, water_balance.cubic_meters - usage_amount)
+                water_balance.last_updated = datetime.utcnow()
+
+        # Log the valve operation
+        new_operation = ValveOperation(user_id=user.id, operation=status)
+        db.session.add(new_operation)
+        db.session.commit()
+
+        # Send notification if valve is closed and usage was recorded
+        if status == "close" and user.pushover_key:
+            send_pushover_notification(
+                user.pushover_key,
+                "Valve Closed",
+                f"Your water valve has been closed. Water usage: {usage_amount:.3f} cubic meters. Remaining balance: {water_balance.cubic_meters:.3f} cubic meters."
+            )
+
+        return (
+            jsonify(
+                {
+                    "success": True,
+                    "message": f"Valve {status} status recorded",
+                    "remaining_balance": water_balance.cubic_meters
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error updating valve status: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/update-status/<user_id>", methods=["POST"])
+def update_device_status(user_id):
+    """
+    API endpoint for NodeMCU to update its status
+    """
+    try:
+        data = request.json
+        remaining_turns = data.get("remaining_turns")
+        valve_status = data.get("valve_status")
+        current_usage = data.get("current_usage")
+        counter_id = data.get("counter_id")
+
+        print(f"NodeMCU status update for user {user_id}, counter {counter_id}: {data}")
+
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # If counter_id is provided, verify it matches the user's counter
+        if counter_id and user.counter_id != counter_id:
+            print(f"Warning: Counter ID mismatch. User has {user.counter_id}, device sent {counter_id}")
+            user.counter_id = counter_id
+            db.session.commit()
+            print(f"Updated user {user_id} to use counter {counter_id}")
+
+        # Check for negative turn count - this indicates a device error
+        if remaining_turns < 0:
+            print(f"WARNING: Negative turn count ({remaining_turns}) detected for user {user_id}")
+            return jsonify({
+                        "success": True,
+                        "message": "Status updated but negative turns detected",
+                "reset_required": True
+            }), 200
+
+        # Get or create water balance
+        water_balance = UserWaterBalance.query.filter_by(user_id=user.id).first()
+        if not water_balance:
+            water_balance = UserWaterBalance(user_id=user.id, cubic_meters=0.0)
+            db.session.add(water_balance)
+            db.session.commit()
+
+        # If valve is closed and there was usage, record it
+        if valve_status == "closed" and current_usage and float(current_usage) > 0:
+            # Create water usage record
+            new_usage = WaterUsage(
+                counter_id=user.counter_id,
+                usage_amount=float(current_usage)
+            )
+            db.session.add(new_usage)
+
+            # Update water balance
+            water_balance.cubic_meters = max(0, water_balance.cubic_meters - float(current_usage))
+            water_balance.last_updated = datetime.utcnow()
+
+            # Send notification if user has pushover key
+            if user.pushover_key:
+                send_pushover_notification(
+                    user.pushover_key,
+                    "Water Usage Complete",
+                    f"Your water usage session has ended.\nUsage: {float(current_usage):.3f} m³\nRemaining balance: {water_balance.cubic_meters:.3f} m³"
+                )
+
+            db.session.commit()
+
+        # If remaining turns is 0, send a notification
+        if remaining_turns == 0 and water_balance.cubic_meters > 0:
+            # Update water balance to 0 since turns are 0
+            water_balance.cubic_meters = 0
+            water_balance.last_updated = datetime.utcnow()
+            
+            if user.pushover_key:
+                send_pushover_notification(
+                    user.pushover_key,
+                    "Water Balance Depleted",
+                    "Your water balance has been fully used. Please recharge your account to continue using water."
+                )
+            
+            db.session.commit()
+
+        return jsonify({
+                    "success": True,
+                    "message": "Status updated successfully",
+                    "reset_required": False,
+            "remaining_balance": water_balance.cubic_meters
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error updating device status: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/borrow-water/<user_id>', methods=['POST'])
+def borrow_water(user_id):
+    try:
+        # Get the request data
+        data = request.get_json()
+        counter_id = data.get('counter_id')
+
+        # Get user and check if they exist
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'success': False, 'error': 'User not found'}), 404
+
+        # Check if user already has an active loan
+        active_loan = WaterLoan.query.filter_by(
+            user_id=user_id,
+            status='active'
+        ).first()
+
+        if active_loan:
+            return jsonify({
+                'success': False,
+                'error': 'You already have an active loan. Please repay it before borrowing more.'
+            }), 400
+            
+        # Set maximum loan amount to 2 cubic meters (2000 RWF)
+        max_loan_amount = 2.0
+        
+        # Create new loan
+        new_loan = WaterLoan(
+            user_id=user_id,
+            amount=max_loan_amount,
+            status='active',
+            borrowed_at=datetime.utcnow()
+        )
+        
+        db.session.add(new_loan)
+        
+        # Send notification to user
+        notification = Notification(
+            user_id=user_id,
+            title="Water Loan Approved",
+            message=f"Your water loan of {max_loan_amount} cubic meters (2000 RWF) has been approved. This will be automatically deducted from your next payment.",
+            notification_type="loan_approved"
+        )
+        db.session.add(notification)
+        
+        db.session.commit()
+        
+        return jsonify({
+            'success': True,
+            'borrowed_amount': max_loan_amount,
+            'borrowed_time': max_loan_amount * 3600,  # Convert to seconds
+            'message': f"Loan of {max_loan_amount} cubic meters approved"
+        })
+        
+    except Exception as e:
+        db.session.rollback()
+        app.logger.error(f"Error in borrow_water: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route("/user/borrow-water", methods=["GET", "POST"])
+@login_required
+def borrow_water_ui():
+    # Check if user already has an active loan
+    active_loan = WaterLoan.query.filter_by(
+        user_id=current_user.id, status="active"
+    ).first()
+
+    # Get user's credit limit (default to 1.0 if not set or None)
+    credit_limit = 1.0  # Default value
+    if hasattr(current_user, "credit_limit") and current_user.credit_limit is not None:
+        credit_limit = current_user.credit_limit
+
+    # Get loan history
+    loan_history = (
+        WaterLoan.query.filter_by(user_id=current_user.id)
+        .order_by(WaterLoan.borrowed_at.desc())
+        .all()
+    )
+
+    if request.method == "POST":
+        # Check if user already has an active loan
+        if active_loan:
+            flash("You already have an active water loan", "error")
+            return redirect(url_for("borrow_water_ui"))
+
+        # Create a new loan with the non-None credit_limit
+        new_loan = WaterLoan(
+            user_id=current_user.id, amount=credit_limit, status="active"
+        )
+        db.session.add(new_loan)
+
+        try:
+            db.session.commit()
+            flash(
+                f"Water loan of {credit_limit} cubic meters approved! You can now use your water.",
+                "success",
+            )
+
+            # Send notification to the user
+            if current_user.pushover_key:
+                send_pushover_notification(
+                    current_user.pushover_key,
+                    "Water Loan Approved",
+                    f"Hello {current_user.full_name}, you've been approved for a water loan of {credit_limit} cubic meters. Please remember to pay it back with your next payment.",
+                )
+        except Exception as e:
+            db.session.rollback()
+            flash(f"Error creating loan: {str(e)}", "error")
+            print(f"Error creating loan: {str(e)}")
+
+        return redirect(url_for("borrow_water_ui"))
+
+    return render_template(
+        "user/borrow_water.html",
+        active_loan=active_loan,
+        credit_limit=credit_limit,
+        loan_history=loan_history,
+    )
+
+
+def get_water_balance(user_id):
+    """
+    Calculate a user's current water balance in cubic meters
+    """
+    user = User.query.get(user_id)
+    if not user:
+        return {"cubic_meters": 0.0, "status": "inactive"}
+
+    # Get the latest successful payment
+    latest_payment = (
+        Payment.query.filter_by(user_id=user.id, status="success")
+        .order_by(Payment.timestamp.desc())
+        .first()
+    )
+
+    # Calculate remaining water based on payment amount
+    remaining_water = 0.0
+    if latest_payment and latest_payment.amount is not None:
+        try:
+            remaining_water = (
+                float(latest_payment.amount) / 1000.0
+            )  # Assuming 1000 RWF per cubic meter
+        except (ValueError, TypeError):
+            remaining_water = 0.0
+
+    # Get total water usage since payment
+    usage_since_payment = 0.0
+    if latest_payment and user.counter_id:
+        # Find the counter
+        counter = Counter.query.filter_by(counter_id=user.counter_id).first()
+        if counter:
+            usage_query = (
+                WaterUsage.query.filter(
+                    WaterUsage.counter_id == counter.id,
+                    WaterUsage.timestamp > latest_payment.timestamp,
+                )
+                .with_entities(func.sum(WaterUsage.usage_amount))
+                .scalar()
+            )
+
+            if usage_query is not None:
+                try:
+                    usage_since_payment = float(usage_query)
+                except (ValueError, TypeError):
+                    usage_since_payment = 0.0
+
+    # Calculate remaining water
+    remaining = max(0.0, remaining_water - usage_since_payment)
+
+    # Check if user has an active loan
+    active_loan = WaterLoan.query.filter_by(user_id=user.id, status="active").first()
+
+    status = "active"
+    if remaining <= 0 and not active_loan:
+        status = "depleted"
+
+    return {"cubic_meters": remaining, "status": status}
+
+
+@app.route("/api/get-water-balance/<user_id>", methods=["GET"])
+def api_get_water_balance(user_id):
+    """
+    API endpoint to get real-time water balance
+    """
+    try:
+        balance = get_water_balance(user_id)
+
+        # Get current valve status to check if water is flowing
+        valve_status = "closed"
+        latest_operation = (
+            ValveOperation.query.filter_by(user_id=int(user_id))
+            .order_by(ValveOperation.timestamp.desc())
+            .first()
+        )
+
+        if latest_operation:
+            valve_status = latest_operation.operation
+
+        # Calculate current usage if valve is open
+        current_usage = 0
+        if valve_status == "open":
+            # Get the time when the valve was opened
+            valve_open_time = latest_operation.timestamp
+
+            # Calculate elapsed time in seconds
+            elapsed_seconds = (datetime.utcnow() - valve_open_time).total_seconds()
+
+            # Calculate usage based on flow rate (0.2 liters per second = 0.0002 cubic meters per second)
+            current_usage = elapsed_seconds * 0.0002
+
+        return (
+            jsonify(
+                {
+                    "remaining_cubic_meters": balance.cubic_meters - current_usage,
+                    "status": balance.status,
+                    "valve_status": valve_status,
+                    "current_usage": current_usage,
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        logger.error(f"Error getting water balance: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+def update_water_balance(user_id, amount, operation="add"):
+    """
+    Update a user's water balance
+
+    Args:
+        user_id: The user's ID
+        amount: Amount in cubic meters
+        operation: 'add' or 'subtract'
+
+    Returns:
+        The updated balance
+    """
+    balance = get_water_balance(user_id)
+
+    if operation == "add":
+        balance.cubic_meters += amount
+    elif operation == "subtract":
+        balance.cubic_meters -= amount
+        # Ensure balance doesn't go negative
+        if balance.cubic_meters < 0:
+            balance.cubic_meters = 0
+
+    balance.last_updated = datetime.utcnow()
+    db.session.commit()
+
+    return balance
+
+
+@app.route("/api/test-usage", methods=["GET"])
+def test_usage_api():
+    """Test endpoint for water usage recording"""
+    # Create a test usage record for user 1
+    try:
+        user = User.query.get(1)
+        if not user or not user.counter_id:
+            return jsonify({"error": "Test user not found or has no counter"}), 404
+
+        counter = Counter.query.filter_by(counter_id=user.counter_id).first()
+        if not counter:
+            return jsonify({"error": "Counter not found"}), 404
+
+        test_usage = WaterUsage(counter_id=counter.id, usage_amount=0.001)
+        db.session.add(test_usage)
+        db.session.commit()
+
+        return jsonify(
+            {
+                "success": True,
+                "message": "Test usage record created",
+                "user_id": user.id,
+                "counter_id": counter.id,
+                "usage_amount": 0.001,
+            }
+        )
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/check-usage-records", methods=["GET"])
+def check_usage_records():
+    """Check if there are any water usage records"""
+    try:
+        count = WaterUsage.query.count()
+        records = WaterUsage.query.order_by(WaterUsage.timestamp.desc()).limit(10).all()
+
+        return jsonify(
+            {
+                "total_records": count,
+                "recent_records": [
+                    {
+                        "id": record.id,
+                        "counter_id": record.counter_id,
+                        "usage_amount": record.usage_amount,
+                        "timestamp": record.timestamp.isoformat(),
+                    }
+                    for record in records
+                ],
+            }
+        )
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/get-latest-usage/<user_id>", methods=["GET"])
+def get_latest_usage(user_id):
+    """
+    API endpoint for web interface to get latest water usage data
+    """
     try:
         user = User.query.get(user_id)
         if not user:
             return jsonify({"error": "User not found"}), 404
-            
-        counter = Counter.query.filter_by(counter_id=user.counter_id).first()
-        if not counter:
-            return jsonify({"error": "Counter not found"}), 404
-            
-        # Check if user has sufficient balance
-        water_balance = UserWaterBalance.query.filter_by(user_id=user.id).first()
-        can_open = water_balance and water_balance.cubic_meters > 0
-        
-        # Get the latest valve operation
-        latest_operation = ValveOperation.query.filter_by(
-            counter_id=counter.counter_id
-        ).order_by(ValveOperation.timestamp.desc()).first()
-        
-        return jsonify({
-            "status": counter.status,
-            "can_open": can_open,
-            "last_operation": latest_operation.action if latest_operation else "closed",
-            "last_operation_time": latest_operation.timestamp.isoformat() if latest_operation else None,
-            "remaining_balance": water_balance.cubic_meters if water_balance else 0
-        }), 200
-        
+
+        # Get the latest water usage record
+        latest_usage = (
+            WaterUsage.query.filter_by(counter_id=user.counter_id)
+            .order_by(WaterUsage.timestamp.desc())
+            .first()
+        )
+
+        # Get the latest payment for remaining water calculation
+        latest_payment = (
+            Payment.query.filter_by(user_id=user_id, status="success")
+            .order_by(Payment.timestamp.desc())
+            .first()
+        )
+
+        # Calculate remaining water
+        remaining_water = 0
+        if latest_payment:
+            remaining_water = (
+                latest_payment.amount / 1000
+            )  # Assuming 1000 RWF per cubic meter
+
+        # Get total water usage since payment
+        usage_since_payment = 0
+        if latest_payment:
+            usage_since_payment = (
+                WaterUsage.query.filter(
+                    WaterUsage.counter_id == user.counter_id,
+                    WaterUsage.timestamp > latest_payment.timestamp,
+                )
+                .with_entities(func.sum(WaterUsage.usage_amount))
+                .scalar()
+                or 0
+            )
+
+        # Calculate remaining water
+        remaining = max(0, remaining_water - usage_since_payment)
+
+        response_data = {"remaining_cubic_meters": remaining}
+
+        # Add latest usage data if available
+        if latest_usage:
+            response_data.update(
+                {
+                    "latest_usage": float(latest_usage.usage_amount),
+                    "latest_timestamp": latest_usage.timestamp.isoformat(),
+                }
+            )
+
+        return jsonify(response_data), 200
     except Exception as e:
+        logger.error(f"Error getting latest usage: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+
+@app.route("/api/update-usage-and-check-balance/<user_id>", methods=["POST"])
+def update_usage_and_check_balance(user_id):
+    """
+    API endpoint for NodeMCU to record usage and check remaining balance in one call
+    Expects: usage_amount (in cubic meters)
+    Returns: remaining_turns, remaining_cubic_meters
+    """
+    data = request.json
+    usage_amount = data.get("usage_amount")
+
+    if not usage_amount:
+        return jsonify({"error": "Missing usage_amount parameter"}), 400
+
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    try:
+        # Convert usage_amount to float
+        usage_amount = float(usage_amount)
+
+        # Create the water usage record
+        new_usage = WaterUsage(counter_id=user.counter_id, usage_amount=usage_amount)
+        db.session.add(new_usage)
+
+        # Deduct from user's water balance
+        updated_balance = update_water_balance(user_id, usage_amount, "subtract")
+
+        # Calculate remaining turns
+        remaining_cubic_meters = updated_balance.cubic_meters
+        remaining_turns = int(remaining_cubic_meters * 200)  # 1 cubic meter = 200 turns
+
+        # Send notification if usage is high
+        if usage_amount > 0.1 and user.pushover_key:
+            send_pushover_notification(
+                user.pushover_key,
+                "Water Usage Update",
+                f"Hello {user.full_name}, you've used {usage_amount:.3f} cubic meters of water. Your remaining balance is {remaining_cubic_meters:.3f} cubic meters.",
+            )
+
+        return (
+            jsonify(
+                {
+                    "success": True,
+                    "remaining_turns": remaining_turns,
+                    "remaining_cubic_meters": remaining_cubic_meters,
+                    "message": "Usage recorded successfully",
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error updating usage and checking balance: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/record-usage", methods=["POST"])
-def record_usage():
+def record_usage_api():
+    """
+    API endpoint for NodeMCU to record water usage
+    """
     try:
         data = request.json
         user_id = data.get("user_id")
-        counter_id = data.get("counter_id")
+        counter_id_str = data.get("counter_id")
         usage_amount = data.get("usage_amount")
-        
-        if not all([user_id, counter_id, usage_amount]):
-            return jsonify({"error": "Missing required fields"}), 400
-            
-        # Record the usage
-        usage = WaterUsage(
-            counter_id=counter_id,
-            usage_amount=usage_amount,
-            timestamp=datetime.utcnow()
+
+        print(
+            f"Recording water usage: User {user_id}, Counter {counter_id_str}, Amount: {usage_amount} cubic meters"
         )
-        db.session.add(usage)
-        
-        # Update water balance
-        water_balance = UserWaterBalance.query.filter_by(user_id=user_id).first()
-        if water_balance:
-            water_balance.cubic_meters = max(0, water_balance.cubic_meters - usage_amount)
-            water_balance.last_updated = datetime.utcnow()
-        
+
+        if not user_id or usage_amount is None:
+            return jsonify({"error": "Missing required parameters"}), 400
+
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # Find the counter by its string identifier
+        counter_id_to_use = counter_id_str if counter_id_str else user.counter_id
+
+        if not counter_id_to_use:
+            return (
+                jsonify({"error": "No counter ID provided or associated with user"}),
+                400,
+            )
+
+        counter = Counter.query.filter_by(counter_id=counter_id_to_use).first()
+        if not counter:
+            # If counter doesn't exist, create it
+            print(f"Counter {counter_id_to_use} not found, creating new counter record")
+            counter = Counter(counter_id=counter_id_to_use, status="assigned")
+            db.session.add(counter)
+            db.session.commit()
+
+            # Assign it to the user if not already assigned
+            if not user.counter_id:
+                user.counter_id = counter_id_to_use
+                db.session.commit()
+
+        # Create a new water usage record
+        new_usage = WaterUsage(
+            counter_id=counter.id,  # Use the counter's database ID
+            usage_amount=float(usage_amount),
+        )
+
+        db.session.add(new_usage)
         db.session.commit()
-        
+
+        print(
+            f"Successfully recorded usage of {usage_amount} cubic meters for counter {counter_id_to_use}"
+        )
+
         return jsonify({"success": True, "message": "Usage recorded successfully"}), 200
-        
     except Exception as e:
         db.session.rollback()
+        print(f"Error recording water usage: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/get-valve-status/<user_id>", methods=["GET"])
+def get_valve_status(user_id):
+    """
+    API endpoint for web interface to check valve status
+    """
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # Get the latest valve operation
+        latest_operation = (
+            ValveOperation.query.filter_by(user_id=user.id)
+            .order_by(ValveOperation.timestamp.desc())
+            .first()
+        )
+
+        status = "unknown"
+        if latest_operation:
+            status = latest_operation.operation
+
+        return (
+            jsonify(
+                {
+                    "status": status,
+                    "last_updated": (
+                        latest_operation.timestamp.isoformat()
+                        if latest_operation
+                        else None
+                    ),
+                }
+            ),
+            200,
+        )
+    except Exception as e:
+        print(f"Error getting valve status: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/report-valve-closed/<user_id>", methods=["POST"])
+def report_valve_closed(user_id):
+    """
+    API endpoint for NodeMCU to report valve closure and record usage in one call
+    Expects: usage_amount (in cubic meters)
+    """
+    try:
+        data = request.json
+        usage_amount = data.get("usage_amount")
+
+        if usage_amount is None:
+            return jsonify({"error": "Missing usage_amount parameter"}), 400
+
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # Convert usage_amount to float
+        usage_amount = float(usage_amount)
+
+        # 1. Log valve operation
+        new_operation = ValveOperation(user_id=int(user_id), operation="closed")
+        db.session.add(new_operation)
+
+        # 2. Create the water usage record
+        new_usage = WaterUsage(counter_id=user.counter_id, usage_amount=usage_amount)
+        db.session.add(new_usage)
+
+        # 3. Update user's balance if needed
+        # This depends on how you're tracking water balance in your system
+
+        db.session.commit()
+
+        logger.info(
+            f"Valve closed and usage of {usage_amount} cubic meters recorded for user {user_id}"
+        )
+
+        # Send notification to the user
+        if user.pushover_key:
+            send_pushover_notification(
+                user.pushover_key,
+                "Valve Closed",
+                f"Hello {user.full_name}, your water valve has been closed. You used {usage_amount:.3f} cubic meters of water.",
+            )
+
+        return (
+            jsonify(
+                {
+                    "success": True,
+                    "message": "Valve closure and usage recorded successfully",
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error reporting valve closure: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/update-status/<user_id>", methods=["POST"])
+def update_status(user_id):
+    """
+    API endpoint for NodeMCU to report current status
+    Expects: remaining_turns, valve_status, current_usage
+    """
+    try:
+        data = request.json
+        remaining_turns = data.get("remaining_turns", 0)
+        valve_status = data.get("valve_status", "closed")
+        current_usage = data.get("current_usage", 0)
+
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # Store the current status in a session variable
+        if "user_statuses" not in session:
+            session["user_statuses"] = {}
+
+        session["user_statuses"][str(user_id)] = {
+            "remaining_turns": remaining_turns,
+            "valve_status": valve_status,
+            "current_usage": float(current_usage),
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+        session.modified = True
+
+        # If valve is closed and there was usage, record it
+        if valve_status == "closed" and float(current_usage) > 0:
+            new_usage = WaterUsage(
+                counter_id=user.counter_id, usage_amount=float(current_usage)
+            )
+            db.session.add(new_usage)
+            db.session.commit()
+
+            # Reset usage after recording
+            session["user_statuses"][str(user_id)]["current_usage"] = 0
+            session.modified = True
+
+        return jsonify({"success": True}), 200
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error updating status: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/get-status/<user_id>", methods=["GET"])
+def get_status(user_id):
+    """
+    API endpoint for web interface to get current status
+    """
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # Get status from session
+        user_statuses = session.get("user_statuses", {})
+        status = user_statuses.get(str(user_id), {})
+
+        if not status:
+            # If not in session, check database for latest valve operation
+            latest_operation = (
+                ValveOperation.query.filter_by(user_id=int(user_id))
+                .order_by(ValveOperation.timestamp.desc())
+                .first()
+            )
+
+            valve_status = "closed"
+            if latest_operation:
+                valve_status = latest_operation.operation
+
+            # Get the latest payment for remaining water calculation
+            latest_payment = (
+                Payment.query.filter_by(user_id=user_id, status="success")
+                .order_by(Payment.timestamp.desc())
+                .first()
+            )
+
+            # Calculate remaining water
+            remaining_water = 0
+            if latest_payment:
+                remaining_water = (
+                    latest_payment.amount / 1000
+                )  # Assuming 1000 RWF per cubic meter
+
+            # Get total water usage since payment
+            usage_since_payment = 0
+            if latest_payment:
+                usage_since_payment = (
+                    WaterUsage.query.filter(
+                        WaterUsage.counter_id == user.counter_id,
+                        WaterUsage.timestamp > latest_payment.timestamp,
+                    )
+                    .with_entities(func.sum(WaterUsage.usage_amount))
+                    .scalar()
+                    or 0
+                )
+
+            # Calculate remaining water
+            remaining = max(0, remaining_water - usage_since_payment)
+
+            # Convert to turns (assuming 1 cubic meter = 200 turns)
+            remaining_turns = int(remaining * 200)
+
+            status = {
+                "valve_status": valve_status,
+                "remaining_turns": remaining_turns,
+                "remaining_water": remaining,
+                "current_usage": 0,
+            }
+
+        # Calculate remaining water in cubic meters if not provided
+        if "remaining_water" not in status and "remaining_turns" in status:
+            status["remaining_water"] = (
+                status["remaining_turns"] * 0.005
+            )  # 1 turn = 0.005 cubic meters
+
+        return jsonify(status), 200
+    except Exception as e:
+        logger.error(f"Error getting status: {str(e)}")
+        return (
+            jsonify(
+                {
+                    "error": str(e),
+                    "valve_status": "unknown",
+                    "remaining_water": 0,
+                    "remaining_turns": 0,
+                    "current_usage": 0,
+                }
+            ),
+            500,
+        )
+
+
+@app.route("/api/retry-failed-reports/<user_id>", methods=["POST"])
+def retry_failed_reports(user_id):
+    """
+    API endpoint for NodeMCU to retry sending failed usage reports
+    Expects: reports - array of {usage_amount, timestamp}
+    """
+    try:
+        data = request.json
+        reports = data.get("reports", [])
+
+        if not reports:
+            return jsonify({"message": "No reports to process"}), 200
+
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        successful_reports = 0
+
+        for report in reports:
+            usage_amount = float(report.get("usage_amount", 0))
+
+            if usage_amount > 0:
+                # Create the water usage record
+                new_usage = WaterUsage(
+                    counter_id=user.counter_id, usage_amount=usage_amount
+                )
+                db.session.add(new_usage)
+                successful_reports += 1
+
+        db.session.commit()
+
+        return (
+            jsonify(
+                {
+                    "success": True,
+                    "message": f"Successfully processed {successful_reports} of {len(reports)} reports",
+                }
+            ),
+            200,
+        )
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error processing failed reports: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/admin/loans")
+@login_required
+def admin_loans():
+    # Check if the current user is an admin
+    if not isinstance(current_user, Admin):
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("user_dashboard"))
+
+    # Get all loans with pagination
+    page = request.args.get("page", 1, type=int)
+    per_page = 10
+    loans = WaterLoan.query.order_by(WaterLoan.borrowed_at.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+
+    return render_template("admin/loans.html", loans=loans)
+
+
+@app.route("/admin/recharges", methods=["GET", "POST"])
+@login_required
+def admin_recharges():
+    # Check if the current user is an admin
+    if not isinstance(current_user, Admin):
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("user_dashboard"))
+
+    if request.method == "POST":
+        user_id = request.form.get("user_id")
+        amount = float(request.form.get("amount", 0))
+        description = request.form.get("description", "")
+
+        user = User.query.get(user_id)
+        if not user:
+            flash("User not found.", "error")
+            return redirect(url_for("admin_recharges"))
+
+        # Create a new payment record for the recharge
+        payment = Payment(
+            user_id=user_id,
+            amount=amount,
+            status="completed",
+            transaction_type="recharge",
+            transaction_ref=f"RECHARGE_{int(time.time())}"
+        )
+        db.session.add(payment)
+
+        # Update user's balance
+        user.balance += amount
+
+        try:
+            db.session.commit()
+            flash(f"Successfully recharged {amount} RWF to user {user.full_name}", "success")
+            
+            # Send notification to user if they have Pushover configured
+            if user.pushover_key:
+                send_pushover_notification(
+                    user.pushover_key,
+                    "Account Recharged",
+                    f"Your account has been recharged with {amount} RWF. New balance: {user.balance} RWF"
+                )
+        except Exception as e:
+            db.session.rollback()
+            flash(f"Error processing recharge: {str(e)}", "error")
+
+        return redirect(url_for("admin_recharges"))
+
+    # Get all users for the dropdown
+    users = User.query.all()
+    # Get recharge history
+    page = request.args.get("page", 1, type=int)
+    per_page = 10
+    recharges = Payment.query.filter_by(transaction_type="recharge").order_by(Payment.timestamp.desc()).paginate(
+        page=page, per_page=per_page, error_out=False
+    )
+
+    return render_template("admin/recharges.html", users=users, recharges=recharges)
+
+
+@app.route("/isp/recharge", methods=["GET", "POST"])
+def isp_recharge():
+    if request.method == "POST":
+        try:
+            user_id = request.form.get("user_id")
+            amount = float(request.form.get("amount", 0))
+
+            if not user_id or amount <= 0:
+                flash("Invalid user or amount.", "error")
+                return redirect(url_for("isp_recharge"))
+
+            # Get user
+            user = User.query.get(user_id)
+            if not user:
+                flash("User not found.", "error")
+                return redirect(url_for("isp_recharge"))
+
+            # Get or create user's account
+            account = Account.query.filter_by(user_id=user.id).first()
+            if not account:
+                # Generate a unique account number
+                account_number = f"ACC{int(datetime.utcnow().timestamp())}"
+                account = Account(
+                    user_id=user.id,
+                    account_number=account_number,
+                    balance=0.0,
+                    status="active"
+                )
+                db.session.add(account)
+
+            # Create payment record
+            payment = Payment(
+                user_id=user.id,
+                amount=amount,
+                status="success",
+                transaction_type="recharge",
+                transaction_ref=f"ISP_RECHARGE_{int(datetime.utcnow().timestamp())}"
+            )
+            db.session.add(payment)
+
+            # Update account balance
+            account.balance = float(account.balance) + amount
+            account.last_transaction = datetime.utcnow()
+
+            # Send notification if Pushover key is configured
+            if user.pushover_key:
+                send_pushover_notification(
+                    user.pushover_key,
+                    "Account Recharged",
+                    f"Your account has been recharged with RWF {amount:,.2f}. New balance: RWF {account.balance:,.2f}",
+                    priority=0
+                )
+
+            db.session.commit()
+            flash(f"Successfully recharged RWF {amount:,.2f} to user {user.full_name}. New balance: RWF {account.balance:,.2f}", "success")
+            return redirect(url_for("isp_recharge"))
+
+        except Exception as e:
+            db.session.rollback()
+            flash(f"Error processing recharge: {str(e)}", "error")
+            return redirect(url_for("isp_recharge"))
+
+    return render_template("isp/recharge.html")
+
+
+@app.route("/user/activate-account", methods=["GET", "POST"])
+@login_required
+def activate_account():
+    # Check if user already has an account
+    existing_account = Account.query.filter_by(user_id=current_user.id).first()
+    if existing_account:
+        flash("You already have an active account", "info")
+        return redirect(url_for("account_details"))
+
+    if request.method == "POST":
+        phone_number = request.form.get("phone_number")
+
+        # Format phone number
+        if not phone_number.startswith("+250"):
+            phone_number = "+250" + phone_number.lstrip("0")
+
+        # Update user's phone number
+        current_user.phone_number = phone_number
+
+        # Generate a unique account number
+        account_number = f"WM{current_user.id:06d}"
+
+        # Create a new account
+        new_account = Account(
+            user_id=current_user.id,
+            account_number=account_number,
+            balance=0.0,
+            status="active",
+        )
+
+        db.session.add(new_account)
+        db.session.commit()
+
+        flash("Your account has been successfully activated!", "success")
+        return redirect(url_for("account_details"))
+
+    return render_template("user/activate_account.html")
+
+
+@app.route("/user/recharge-account", methods=["GET", "POST"])
+@login_required
+def recharge_account():
+    # Get user's account
+    account = Account.query.filter_by(user_id=current_user.id).first()
+
+    if not account:
+        flash("You need to activate your account first", "warning")
+        return redirect(url_for("activate_account"))
+
+    # Get recharge history
+    recharges = (
+        Payment.query.filter_by(
+            user_id=current_user.id, status="success", transaction_type="recharge"
+        )
+        .order_by(Payment.timestamp.desc())
+        .limit(10)
+        .all()
+    )
+
+    if request.method == "POST":
+        phone_number = request.form.get("phone_number") or current_user.phone_number
+        amount = float(request.form.get("amount"))
+
+        # Format phone number (keep this for future real implementation)
+        if not phone_number.startswith("+250"):
+            phone_number = "+250" + phone_number.lstrip("0")
+
+        # Generate a transaction reference
+        transaction_ref = str(uuid.uuid4())
+
+        try:
+            # Create a new payment record for recharge
+            new_payment = Payment(
+                user_id=current_user.id,
+                amount=amount,
+                status="pending",
+                transaction_ref=transaction_ref,
+                transaction_type="recharge",  # Mark this as a recharge transaction
+            )
+            db.session.add(new_payment)
+            db.session.commit()
+
+            # In a real implementation, you would integrate with mobile money API here
+            # For now, we'll simulate a successful recharge
+            new_payment.status = "success"
+
+            # Update account balance instead of user balance
+            account.balance += amount
+            account.last_transaction = datetime.utcnow()
+
+            db.session.commit()
+
+            # Send notification if user has Pushover key
+            if current_user.pushover_key:
+                send_pushover_notification(
+                    current_user.pushover_key,
+                    "Account Recharged",
+                    f"Your account has been recharged with RWF {amount:,.2f}. Your new balance is RWF {account.balance:,.2f}.",
+                )
+
+            flash(
+                f"Your account has been successfully recharged with RWF {amount:,.2f}!",
+                "success",
+            )
+            return redirect(url_for("account_details"))
+
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f"Recharge failed: {str(e)}")
+            flash("Recharge processing failed. Please try again.", "error")
+
+    return render_template(
+        "user/recharge_account.html", account=account, recharges=recharges
+    )
+
+
+migrate = Migrate(app, db)
+
+@app.route("/api/water-flow/<user_id>", methods=["GET"])
+def get_water_flow(user_id):
+    """
+    API endpoint to get real-time water flow information
+    """
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+
+        # Get the latest valve operation
+        latest_operation = ValveOperation.query.filter_by(user_id=user.id).order_by(ValveOperation.timestamp.desc()).first()
+        
+        # Get current water balance
+        water_balance = UserWaterBalance.query.filter_by(user_id=user.id).first()
+        if not water_balance:
+            water_balance = UserWaterBalance(user_id=user.id, cubic_meters=0.0)
+            db.session.add(water_balance)
+            db.session.commit()
+
+        # Initialize response data
+        response_data = {
+            "valve_status": "closed",
+            "remaining_balance": water_balance.cubic_meters,
+            "current_flow_rate": 0.0,  # liters per second
+            "estimated_usage": 0.0,    # cubic meters
+            "time_elapsed": 0          # seconds
+        }
+
+        # If valve is open, calculate current usage
+        if latest_operation and latest_operation.operation == "open":
+            time_elapsed = (datetime.utcnow() - latest_operation.timestamp).total_seconds()
+            flow_rate = 0.2  # liters per second
+            estimated_usage = (flow_rate * time_elapsed) / 1000  # convert to cubic meters
+
+            response_data.update({
+                "valve_status": "open",
+                "current_flow_rate": flow_rate,
+                "estimated_usage": estimated_usage,
+                "time_elapsed": time_elapsed
+            })
+
+        return jsonify(response_data), 200
+    except Exception as e:
+        print(f"Error getting water flow: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@app.template_filter("format_number")
+def format_number(value):
+    """Format number with thousand separators"""
+    try:
+        return "{:,.2f}".format(float(value))
+    except (ValueError, TypeError):
+        return "0.00"
+
+@app.route("/admin/counters/add", methods=["POST"])
+@login_required
+def add_counter():
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
+
+    try:
+        counter_id = request.form.get("counter_id")
+        if not counter_id:
+            flash("Counter ID is required.", "error")
+            return redirect(url_for("manage_counters"))
+
+        # Check if counter already exists
+        existing_counter = Counter.query.filter_by(counter_id=counter_id).first()
+        if existing_counter:
+            flash("Counter ID already exists.", "error")
+            return redirect(url_for("manage_counters"))
+
+        # Create new counter
+        new_counter = Counter(
+            counter_id=counter_id,
+            status="available"
+        )
+        db.session.add(new_counter)
+        db.session.commit()
+
+        flash("Counter added successfully.", "success")
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error adding counter: {str(e)}", "error")
+
+    return redirect(url_for("manage_counters"))
+
+@app.route("/admin/counters/assign", methods=["POST"])
+@login_required
+def assign_counter():
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
+
+    try:
+        counter_id = request.form.get("counter_id")
+        user_id = request.form.get("user_id")
+
+        if not counter_id or not user_id:
+            flash("Both counter ID and user ID are required.", "error")
+            return redirect(url_for("manage_counters"))
+
+        # Get counter and user
+        counter = Counter.query.filter_by(counter_id=counter_id).first()
+        user = User.query.get(user_id)
+
+        if not counter or not user:
+            flash("Counter or user not found.", "error")
+            return redirect(url_for("manage_counters"))
+
+        # Check if counter is already assigned
+        if counter.assigned_to:
+            flash("This counter is already assigned to a user.", "error")
+            return redirect(url_for("manage_counters"))
+
+        # Check if user already has a counter
+        if user.counter_id:
+            flash("This user already has a counter assigned.", "error")
+            return redirect(url_for("manage_counters"))
+
+        # Assign counter to user
+        counter.assigned_to = user_id
+        counter.status = "active"
+        user.counter_id = counter_id
+
+        # Initialize water balance for user if not exists
+        water_balance = UserWaterBalance.query.filter_by(user_id=user_id).first()
+        if not water_balance:
+            water_balance = UserWaterBalance(user_id=user_id, cubic_meters=0.0)
+            db.session.add(water_balance)
+
+        db.session.commit()
+        flash("Counter assigned successfully.", "success")
+
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error assigning counter: {str(e)}", "error")
+
+    return redirect(url_for("manage_counters"))
+
+@app.route("/admin/water-usage/add", methods=["POST"])
+@login_required
+def add_reading():
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
+
+    try:
+        counter_id = request.form.get("counter_id")
+        usage_amount = float(request.form.get("usage_amount", 0))
+
+        if not counter_id or usage_amount <= 0:
+            flash("Invalid counter ID or usage amount.", "error")
+            return redirect(url_for("water_usage_page"))
+
+        # Get counter
+        counter = Counter.query.filter_by(counter_id=counter_id).first()
+        if not counter:
+            flash("Counter not found.", "error")
+            return redirect(url_for("water_usage_page"))
+
+        # Create new reading
+        new_reading = WaterUsage(
+            counter_id=counter.id,
+            usage_amount=usage_amount
+        )
+        db.session.add(new_reading)
+        db.session.commit()
+
+        flash("Water usage reading added successfully.", "success")
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error adding reading: {str(e)}", "error")
+
+    return redirect(url_for("water_usage_page"))
+
+@app.route("/api/search-users")
+def search_users():
+    query = request.args.get('q', '').strip()
+    if not query:
+        return jsonify([])
+    
+    # Search by phone number, ID card, or full name
+    users = User.query.filter(
+        db.or_(
+            User.phone_number.ilike(f'%{query}%'),
+            User.id_card.ilike(f'%{query}%'),
+            User.full_name.ilike(f'%{query}%')
+        )
+    ).limit(10).all()
+    
+    results = []
+    for user in users:
+        results.append({
+            'id': user.id,
+            'full_name': user.full_name,
+            'phone_number': user.phone_number or '',
+            'id_card': user.id_card,
+            'counter_id': user.counter_id or ''
+        })
+    
+    return jsonify(results)
 
 if __name__ == "__main__":
     with app.app_context():
         db.create_all()
     app.run(debug=True, host="0.0.0.0", port=5000)
-
