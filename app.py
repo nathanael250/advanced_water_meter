@@ -2109,7 +2109,7 @@ def api_valve_control():
             
         # Update valve status in database
         if action == "open":
-            counter.status = "open"
+            counter.status = "opened"
             success = True
             message = "Valve opened successfully"
         elif action == "close":
