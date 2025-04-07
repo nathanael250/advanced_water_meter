@@ -19,25 +19,19 @@
                 </div>
             </div>
             <div class="flex space-x-4">
-                <form action="{{ url_for('valve_control') }}" method="post" class="flex-1" id="open-form">
-                    <input type="hidden" name="action" value="open">
-                    <button type="submit"
-                            id="open-button"
-                            class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-md transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                            {% if valve_status == 'open' or not has_balance %}disabled{% endif %}>
-                        Open Valve
-                    </button>
-                </form>
+                <button type="button"
+                        id="open-button"
+                        class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-md transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                        {% if valve_status == 'open' or not has_balance %}disabled{% endif %}>
+                    Open Valve
+                </button>
                 
-                <form action="{{ url_for('valve_control') }}" method="post" class="flex-1" id="close-form">
-                    <input type="hidden" name="action" value="close">
-                    <button type="submit"
-                            id="close-button"
-                            class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-md transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                            {% if valve_status == 'closed' %}disabled{% endif %}>
-                        Close Valve
-                    </button>
-                </form>
+                <button type="button"
+                        id="close-button"
+                        class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-md transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                        {% if valve_status == 'closed' %}disabled{% endif %}>
+                    Close Valve
+                </button>
             </div>
         </div>
     </div>
@@ -49,8 +43,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const remainingBalance = document.getElementById('remaining-balance');
     const openButton = document.getElementById('open-button');
     const closeButton = document.getElementById('close-button');
-    const openForm = document.getElementById('open-form');
-    const closeForm = document.getElementById('close-form');
     
     // Function to update UI
     function updateUI(data) {
@@ -73,18 +65,17 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Function to fetch current status
     function fetchStatus() {
-        fetch('/api/get-valve-status/{{ current_user.id }}', {
-            headers: {
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (!data.error) {
+        fetch('/api/get-valve-status/{{ current_user.id }}')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Server responded with status: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
                 updateUI(data);
-            }
-        })
-        .catch(error => console.error('Error fetching status:', error));
+            })
+            .catch(error => console.error('Error fetching status:', error));
     }
     
     // Initial status fetch
@@ -93,10 +84,8 @@ document.addEventListener('DOMContentLoaded', function() {
     // Set up polling (every 2 seconds)
     setInterval(fetchStatus, 2000);
     
-    // Handle form submissions with AJAX
-    openForm.addEventListener('submit', function(e) {
-        e.preventDefault();
-        
+    // Handle open valve button
+    openButton.addEventListener('click', function() {
         // Show loading state
         openButton.disabled = true;
         openButton.textContent = 'Opening...';
@@ -104,15 +93,19 @@ document.addEventListener('DOMContentLoaded', function() {
         fetch('/api/valve-control/{{ current_user.id }}', {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json',
-                'X-Requested-With': 'XMLHttpRequest'
+                'Content-Type': 'application/json'
             },
             body: JSON.stringify({
                 action: 'open',
                 counter_id: '{{ current_user.counter_id }}'
             })
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Server responded with status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
             // Reset button text
             openButton.textContent = 'Open Valve';
@@ -139,9 +132,8 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
     
-    closeForm.addEventListener('submit', function(e) {
-        e.preventDefault();
-        
+    // Handle close valve button
+    closeButton.addEventListener('click', function() {
         // Show loading state
         closeButton.disabled = true;
         closeButton.textContent = 'Closing...';
@@ -149,15 +141,19 @@ document.addEventListener('DOMContentLoaded', function() {
         fetch('/api/valve-control/{{ current_user.id }}', {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json',
-                'X-Requested-With': 'XMLHttpRequest'
+                'Content-Type': 'application/json'
             },
             body: JSON.stringify({
                 action: 'close',
                 counter_id: '{{ current_user.counter_id }}'
             })
         })
-        .then(response => response.json())
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`Server responded with status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
             // Reset button text
             closeButton.textContent = 'Close Valve';
