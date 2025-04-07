@@ -2094,30 +2094,6 @@ def check_balance(user_id):
 @login_required
 def valve_control():
     try:
-        # Get the current valve status from the latest operation for this user's counter
-        latest_operation = ValveOperation.query.join(Counter).filter(
-            Counter.counter_id == current_user.counter_id
-        ).order_by(ValveOperation.timestamp.desc()).first()
-        
-        valve_status = latest_operation.action if latest_operation else 'closed'
-        
-        # Get water balance directly from UserWaterBalance model
-        water_balance = UserWaterBalance.query.filter_by(user_id=current_user.id).first()
-        if not water_balance:
-            # Create a new water balance record if it doesn't exist
-            water_balance = UserWaterBalance(user_id=current_user.id, cubic_meters=0.0)
-            db.session.add(water_balance)
-            db.session.commit()
-        
-        remaining_balance = float(water_balance.cubic_meters)
-        
-        # Ensure remaining_balance is a valid number
-        if math.isnan(remaining_balance):
-            remaining_balance = 0.0
-        
-        # Determine if user has sufficient balance to open valve
-        has_balance = remaining_balance > 0
-    
         if request.method == 'POST':
             action = request.form.get('action')
             if action in ['open', 'close']:
@@ -2138,22 +2114,30 @@ def valve_control():
                     db.session.commit()
                     
                     flash(f'Valve {action}ed successfully', 'success')
-                    return redirect(url_for('valve_control'))
+                    return redirect(url_for('valve_control'))  # Redirect back to the same page
                 else:
                     flash('No counter assigned to your account', 'error')
             else:
                 flash('Invalid action', 'error')
-    
+        
+        # Get current status
+        counter = Counter.query.filter_by(counter_id=current_user.counter_id).first()
+        water_balance = UserWaterBalance.query.filter_by(user_id=current_user.id).first()
+        
+        if not water_balance:
+            water_balance = UserWaterBalance(user_id=current_user.id, cubic_meters=0.0)
+            db.session.add(water_balance)
+            db.session.commit()
+        
         return render_template('user/valve_control.html', 
-                            valve_status=valve_status,
-                            remaining_balance=remaining_balance,
-                            has_balance=has_balance)
-
+                            valve_status=counter.status if counter else 'closed',
+                            remaining_balance=water_balance.cubic_meters,
+                            has_balance=water_balance.cubic_meters > 0)
+        
     except Exception as e:
         print(f"Error in valve_control: {str(e)}")
         flash('An error occurred while accessing valve control', 'error')
         return redirect(url_for('user_dashboard'))
-
 
 
 @app.route('/borrow-water', methods=['GET', 'POST'])
