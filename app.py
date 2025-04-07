@@ -81,6 +81,15 @@ CALLBACK_URL = "https://webhook.site/080697c2-8fd1-4abb-b653-52509852a53e"
 def _jinja2_filter_min(value, other_value):
     return min(value, other_value)
 
+@app.template_filter('format_number')
+def format_number(value):
+    """Format a number with commas and 2 decimal places"""
+    if value is None:
+        return "0.00"
+    try:
+        return "{:,.2f}".format(float(value))
+    except (ValueError, TypeError):
+        return "0.00"
 
 def log_momo_response(response):
     """Log MOMO API response for debugging"""
@@ -126,6 +135,9 @@ class WaterUsage(db.Model):
     usage_amount = db.Column(db.Float, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     acknowledged = db.Column(db.Boolean, default=False)
+    
+    # Add relationship with Counter
+    counter = db.relationship("Counter", backref="water_usages")
 
 
 # Update the Payment model
@@ -733,9 +745,30 @@ def water_usage_page():
     if not admin:
         return redirect(url_for("dashboard"))
 
-    # Get water usage data
-    usage_data = WaterUsage.query.order_by(WaterUsage.timestamp.desc()).all()
-    return render_template("admin/water_usage.html", usage_data=usage_data)
+    # Get water usage data with counter information
+    usage_data = WaterUsage.query.join(Counter).order_by(WaterUsage.timestamp.desc()).all()
+    
+    # Calculate total usage
+    total_usage = sum(usage.usage_amount for usage in usage_data)
+    
+    # Get usage by counter
+    usage_by_counter = {}
+    for usage in usage_data:
+        if usage.counter_id not in usage_by_counter:
+            usage_by_counter[usage.counter_id] = {
+                'counter': usage.counter,
+                'total_usage': 0,
+                'usage_count': 0
+            }
+        usage_by_counter[usage.counter_id]['total_usage'] += usage.usage_amount
+        usage_by_counter[usage.counter_id]['usage_count'] += 1
+    
+    return render_template(
+        "admin/water_usage.html",
+        usage_data=usage_data,
+        total_usage=total_usage,
+        usage_by_counter=usage_by_counter
+    )
 
 
 @app.route("/admin/billing")
@@ -2340,6 +2373,120 @@ def record_usage():
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": str(e)}), 500
+
+@app.route("/admin/loans")
+@login_required
+def admin_loans():
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
+
+    # Get all loans with user details
+    loans = WaterLoan.query.order_by(WaterLoan.borrowed_at.desc()).all()
+    for loan in loans:
+        loan.user = User.query.get(loan.user_id)
+        loan.counter = Counter.query.filter_by(user_id=loan.user_id).first()
+
+    return render_template("admin/loans.html", loans=loans)
+
+@app.route("/admin/counters/add", methods=["POST"])
+@login_required
+def add_counter():
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
+
+    try:
+        counter_id = request.form.get("counter_id")
+        
+        # Check if counter ID already exists
+        existing_counter = Counter.query.filter_by(counter_id=counter_id).first()
+        if existing_counter:
+            flash("A meter with this ID already exists.", "error")
+            return redirect(url_for("manage_counters"))
+            
+        # Create new counter
+        new_counter = Counter(
+            counter_id=counter_id,
+            status="available"
+        )
+        db.session.add(new_counter)
+        db.session.commit()
+        
+        flash("Water meter added successfully.", "success")
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error adding water meter: {str(e)}", "error")
+        
+    return redirect(url_for("manage_counters"))
+
+@app.route("/admin/counters/assign", methods=["POST"])
+@login_required
+def assign_counter():
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        flash("Access denied. Admin privileges required.", "error")
+        return redirect(url_for("index"))
+
+    try:
+        counter_id = request.form.get("counter_id")
+        user_id = request.form.get("user_id")
+        
+        # Get the counter and user
+        counter = Counter.query.filter_by(counter_id=counter_id).first()
+        user = User.query.get(user_id)
+        
+        if not counter or not user:
+            flash("Invalid counter or user.", "error")
+            return redirect(url_for("manage_counters"))
+            
+        # Check if user already has a counter
+        if user.counter_id:
+            flash("This user already has a water meter assigned.", "error")
+            return redirect(url_for("manage_counters"))
+            
+        # Assign the counter
+        counter.status = "assigned"
+        counter.assigned_to = user.id_card
+        user.counter_id = counter_id
+        db.session.commit()
+        
+        flash("Water meter assigned successfully.", "success")
+    except Exception as e:
+        db.session.rollback()
+        flash(f"Error assigning water meter: {str(e)}", "error")
+        
+    return redirect(url_for("manage_counters"))
+
+@app.route("/admin/counters/<counter_id>/delete", methods=["DELETE"])
+@login_required
+def delete_counter(counter_id):
+    # Check if user is admin
+    admin = Admin.query.filter_by(id=current_user.id).first()
+    if not admin:
+        return jsonify({"success": False, "error": "Access denied"}), 403
+
+    try:
+        counter = Counter.query.filter_by(counter_id=counter_id).first()
+        if not counter:
+            return jsonify({"success": False, "error": "Counter not found"}), 404
+            
+        # Check if counter is assigned
+        if counter.assigned_to:
+            return jsonify({"success": False, "error": "Cannot delete an assigned counter"}), 400
+            
+        db.session.delete(counter)
+        db.session.commit()
+        
+        return jsonify({"success": True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"success": False, "error": str(e)}), 500
 
 if __name__ == "__main__":
     with app.app_context():
