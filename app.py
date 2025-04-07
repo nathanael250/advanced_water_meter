@@ -287,7 +287,7 @@ def admin_dashboard():
     # Calculate monthly revenue
     first_day_of_month = datetime.utcnow().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     monthly_revenue = Payment.query.filter(
-        Payment.status == "success",
+            Payment.status == "success",
         Payment.timestamp >= first_day_of_month
     ).with_entities(func.sum(Payment.amount)).scalar() or 0
 
@@ -325,7 +325,7 @@ def admin_dashboard():
         user = User.query.get(counter.user_id) if counter else None
         recent_activities.append({
             "type": "usage",
-            "type_color": "blue",
+                "type_color": "blue",
             "icon": '<svg class="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
             "title": "Water Usage Recorded",
             "details": f"Counter: {counter.id if counter else 'Unknown'} - User: {user.full_name if user else 'Unknown'} - {usage.usage_amount} m³",
@@ -335,11 +335,11 @@ def admin_dashboard():
     for payment in recent_payments:
         user = User.query.get(payment.user_id)
         recent_activities.append({
-            "type": "payment",
-            "type_color": "green",
-            "icon": '<svg class="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
-            "title": "Payment Received",
-            "details": f"{user.full_name} - RWF {payment.amount:,}",
+                "type": "payment",
+                "type_color": "green",
+                "icon": '<svg class="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+                "title": "Payment Received",
+                "details": f"{user.full_name} - RWF {payment.amount:,}",
             "timestamp": payment.timestamp
         })
 
@@ -503,7 +503,7 @@ def admin_activities():
 
     # Get all activities
     activities = []
-    
+
     # Add water usage activities
     water_usage = WaterUsage.query.order_by(WaterUsage.timestamp.desc()).all()
     for usage in water_usage:
@@ -511,7 +511,7 @@ def admin_activities():
         user = User.query.get(counter.user_id) if counter else None
         activities.append({
             "type": "usage",
-            "type_color": "blue",
+                "type_color": "blue",
             "icon": '<svg class="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
             "title": "Water Usage Recorded",
             "details": f"Counter: {counter.id if counter else 'Unknown'} - User: {user.full_name if user else 'Unknown'} - {usage.usage_amount} m³",
@@ -523,11 +523,11 @@ def admin_activities():
     for payment in payments:
         user = User.query.get(payment.user_id)
         activities.append({
-            "type": "payment",
-            "type_color": "green",
+                "type": "payment",
+                "type_color": "green",
             "icon": '<svg class="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
-            "title": "Payment Received",
-            "details": f"{user.full_name} - RWF {payment.amount:,}",
+                "title": "Payment Received",
+                "details": f"{user.full_name} - RWF {payment.amount:,}",
             "timestamp": payment.timestamp
         })
 
@@ -2400,8 +2400,8 @@ def update_device_status(user_id):
         if remaining_turns < 0:
             print(f"WARNING: Negative turn count ({remaining_turns}) detected for user {user_id}")
             return jsonify({
-                "success": True,
-                "message": "Status updated but negative turns detected",
+                        "success": True,
+                        "message": "Status updated but negative turns detected",
                 "reset_required": True
             }), 200
 
@@ -2451,9 +2451,9 @@ def update_device_status(user_id):
             db.session.commit()
 
         return jsonify({
-            "success": True,
-            "message": "Status updated successfully",
-            "reset_required": False,
+                    "success": True,
+                    "message": "Status updated successfully",
+                    "reset_required": False,
             "remaining_balance": water_balance.cubic_meters
         }), 200
     except Exception as e:
@@ -2468,18 +2468,18 @@ def borrow_water(user_id):
         # Get the request data
         data = request.get_json()
         counter_id = data.get('counter_id')
-        
+
         # Get user and check if they exist
         user = User.query.get(user_id)
         if not user:
             return jsonify({'success': False, 'error': 'User not found'}), 404
-            
+
         # Check if user already has an active loan
         active_loan = WaterLoan.query.filter_by(
             user_id=user_id,
             status='active'
         ).first()
-        
+
         if active_loan:
             return jsonify({
                 'success': False,
