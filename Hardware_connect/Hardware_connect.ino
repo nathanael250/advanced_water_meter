@@ -17,6 +17,11 @@ volatile int turnCount = 0;  // Will be updated from server
 bool valveOpen = false;
 bool buttonState = false;
 bool lastButtonState = false;
+bool wasValveOpen = false;  // Track previous valve state
+bool hasSentUsage = false;  // Track if we've sent usage for current session
+unsigned long lastWebCheck = 0;
+const unsigned long WEB_CHECK_INTERVAL = 1000; // Check web status every 1 second
+
 
 float usageAmount = 0.0;  // Track water usage in cubic meters
 
@@ -100,6 +105,12 @@ void loop() {
     checkButton();
     checkFlowSensor();
    
+    // Check web status more frequently
+    if (millis() - lastWebCheck > WEB_CHECK_INTERVAL) {
+        handleWebValveControl();
+        lastWebCheck = millis();
+    }
+   
     // Periodically check for new payments
     static unsigned long lastPaymentCheck = 0;
     if (millis() - lastPaymentCheck > 300000) { // Every 5 minutes
@@ -111,16 +122,6 @@ void loop() {
     if ((valveOpen || usageAmount > 0) && millis() - lastStatusUpdate > STATUS_UPDATE_INTERVAL) {
         reportStatus();
         lastStatusUpdate = millis();
-    }
-   
-    // Periodically reset device state if turn count is negative
-    static unsigned long lastResetCheck = 0;
-    if (millis() - lastResetCheck > 3600000) { // Every hour
-        if (turnCount < 0) {
-            Serial.println("Detected negative turn count, resetting device state");
-            resetDeviceState();
-        }
-        lastResetCheck = millis();
     }
 }
 
@@ -215,77 +216,34 @@ void reportStatus() {
     WiFiClient client;
     HTTPClient http;
     
-    // Set timeout values
-    http.setTimeout(10000);  // 10 second timeout
-    http.setReuse(true);     // Reuse connection if possible
-    
     String url = "http://" + String(serverAddress) + ":" + String(serverPort) + "/api/update-status/" + userId;
-    Serial.println("Reporting status to: " + url);
     
-    // Retry logic with exponential backoff
-    int maxRetries = 3;
-    int retryDelay = 1000;  // Start with 1 second delay
-    bool success = false;
+    http.begin(client, url);
+    http.addHeader("Content-Type", "application/json");
     
-    for (int attempt = 0; attempt < maxRetries && !success; attempt++) {
-        if (attempt > 0) {
-            Serial.printf("Retry attempt %d of %d after %d ms delay\n", attempt + 1, maxRetries, retryDelay);
-            delay(retryDelay);
-            retryDelay *= 2;  // Double the delay for next retry
-        }
-        
-        http.begin(client, url);
-        http.addHeader("Content-Type", "application/json");
-        
-        StaticJsonDocument<200> doc;
-        doc["remaining_turns"] = turnCount;
-        doc["valve_status"] = valveOpen ? "open" : "closed";
-        doc["current_usage"] = usageAmount;
-        doc["counter_id"] = counterId;
-        
-        String jsonPayload;
-        serializeJson(doc, jsonPayload);
-        
-        Serial.println("Sending payload: " + jsonPayload);
-        int httpCode = http.POST(jsonPayload);
-        
-        if (httpCode > 0) {
-            if (httpCode == HTTP_CODE_OK) {
-                String payload = http.getString();
-                Serial.println("Status response: " + payload);
-                
-                // Parse response for reset command
-                StaticJsonDocument<200> responseDoc;
-                DeserializationError error = deserializeJson(responseDoc, payload);
-                
-                if (!error && responseDoc["reset_required"]) {
-                    Serial.println("Server requested device reset");
-                    resetDeviceState();
-                } else {
-                    Serial.println("Status reported successfully");
-                    // Reset usage amount after successful report
-                    if (!valveOpen) {
-                        usageAmount = 0.0;
-                    }
-                }
-                success = true;
-            } else {
-                Serial.printf("Server returned error code: %d\n", httpCode);
-                String payload = http.getString();
-                Serial.println("Error response: " + payload);
-            }
+    StaticJsonDocument<200> doc;
+    doc["remaining_turns"] = turnCount;
+    doc["valve_status"] = valveOpen ? "open" : "closed";
+    doc["current_usage"] = usageAmount;
+    doc["counter_id"] = counterId;
+    
+    String jsonPayload;
+    serializeJson(doc, jsonPayload);
+    
+    int httpCode = http.POST(jsonPayload);
+    
+    if (httpCode > 0) {
+        if (httpCode == HTTP_CODE_OK) {
+            String payload = http.getString();
+            Serial.println("Status response: " + payload);
         } else {
-            Serial.printf("Connection failed: %s (HTTP code: %d)\n", http.errorToString(httpCode).c_str(), httpCode);
+            Serial.printf("Server error: HTTP code: %d\n", httpCode);
         }
-        
-        http.end();
+    } else {
+        Serial.printf("Connection failed: %s (HTTP code: %d)\n", http.errorToString(httpCode).c_str(), httpCode);
     }
     
-    if (!success) {
-        Serial.println("Failed to report status after all retry attempts");
-        // Store the failed report for later retry
-        // You might want to implement a queue system here
-    }
+    http.end();
 }
 
 void checkBalance() {
@@ -409,6 +367,41 @@ void checkForNewPayment() {
     http.end();
 }
 
+
+void handleWebValveControl() {
+    if (WiFi.status() != WL_CONNECTED) return;
+    
+    WiFiClient client;
+    HTTPClient http;
+    
+    String url = "http://" + String(serverAddress) + ":" + String(serverPort) + "/api/get-valve-status/" + userId;
+    
+    http.begin(client, url);
+    http.setTimeout(5000); // 5 second timeout
+    
+    int httpCode = http.GET();
+    if (httpCode == HTTP_CODE_OK) {
+        String payload = http.getString();
+        
+        StaticJsonDocument<200> responseDoc;
+        DeserializationError error = deserializeJson(responseDoc, payload);
+        
+        if (!error) {
+            String status = responseDoc["status"];
+            bool can_open = responseDoc["can_open"];
+            
+            // Only change valve state if it's different from current state
+            if (status == "open" && !valveOpen && can_open) {
+                openValve();
+            } else if (status == "close" && valveOpen) {
+                closeValve();
+            }
+        }
+    }
+    http.end();
+}
+
+
 void checkButton() {
     buttonState = digitalRead(BUTTON_PIN) == LOW;
 
@@ -421,7 +414,6 @@ void checkButton() {
             }
         } else {
             Serial.println("No turns available. Please purchase water to operate the valve.");
-            // Try to borrow water if no turns available
             borrowWater();
         }
     }
@@ -495,9 +487,6 @@ void checkFlowSensor() {
     if (valveOpen && turnCount <= 0) {
         Serial.println("No more turns available, closing valve...");
         closeValve();
-       
-        // Report status immediately when valve is closed due to no turns
-        reportStatus();
     }
 }
 
@@ -519,7 +508,8 @@ bool updateValveStatus(String status, int maxRetries) {
         WiFiClient client;
         HTTPClient http;
        
-        String url = "http://" + String(serverAddress) + ":" + String(serverPort) + "/api/valve-status/" + userId;
+        // Use the correct endpoint
+        String url = "http://" + String(serverAddress) + ":" + String(serverPort) + "/api/valve-control/" + userId;
        
         Serial.println("Connecting to: " + url);
        
@@ -528,8 +518,8 @@ bool updateValveStatus(String status, int maxRetries) {
         http.addHeader("Content-Type", "application/json");
        
         StaticJsonDocument<200> doc;
-        doc["status"] = status;
-        doc["counter_id"] = counterId;  // Include the counter ID
+        doc["action"] = status;  // Use "action" instead of "status"
+        doc["counter_id"] = counterId;
        
         String jsonPayload;
         serializeJson(doc, jsonPayload);
@@ -564,36 +554,96 @@ bool updateValveStatus(String status, int maxRetries) {
     return false;
 }
 
+
+
+
+
 void openValve() {
     if (turnCount > 0) {
         digitalWrite(SOLENOID_VALVE, HIGH);
         valveOpen = true;
+        hasSentUsage = false;  // Reset usage tracking
         Serial.println("Valve opened");
+        
+        // Send immediate status update
+        StaticJsonDocument<200> doc;
+        doc["remaining_turns"] = turnCount;
+        doc["valve_status"] = "open";
+        doc["current_usage"] = usageAmount;
+        doc["counter_id"] = counterId;
+        
+        String jsonPayload;
+        serializeJson(doc, jsonPayload);
+        
+        WiFiClient client;
+        HTTPClient http;
+        String url = "http://" + String(serverAddress) + ":" + String(serverPort) + "/api/update-status/" + userId;
+        http.begin(client, url);
+        http.addHeader("Content-Type", "application/json");
+        http.POST(jsonPayload);
+        http.end();
+        
+        // Update valve status
         updateValveStatus("open");
-       
-        // Report status immediately when valve is opened
-        reportStatus();
     }
 }
-
 void closeValve() {
     digitalWrite(SOLENOID_VALVE, LOW);
     valveOpen = false;
     Serial.println("Valve closed.");
    
-    // Report water usage before updating valve status
-    if (usageAmount > 0) {
+    // Send immediate status update
+    StaticJsonDocument<200> doc;
+    doc["remaining_turns"] = turnCount;
+    doc["valve_status"] = "closed";
+    doc["current_usage"] = usageAmount;
+    doc["counter_id"] = counterId;
+    
+    String jsonPayload;
+    serializeJson(doc, jsonPayload);
+    
+    // Send immediate status update
+    WiFiClient client;
+    HTTPClient http;
+    String url = "http://" + String(serverAddress) + ":" + String(serverPort) + "/api/update-status/" + userId;
+    http.begin(client, url);
+    http.addHeader("Content-Type", "application/json");
+    http.POST(jsonPayload);
+    http.end();
+   
+    // Report water usage if any
+    if (usageAmount > 0 && !hasSentUsage) {
         Serial.printf("Reporting water usage of %.3f cubic meters\n", usageAmount);
-        reportWaterUsage();
-    } else {
-        Serial.println("No water usage to report");
+        
+        // Send usage data to record-usage endpoint
+        String usageUrl = "http://" + String(serverAddress) + ":" + String(serverPort) + "/api/record-usage";
+        http.begin(client, usageUrl);
+        http.addHeader("Content-Type", "application/json");
+        
+        StaticJsonDocument<200> usageDoc;
+        usageDoc["user_id"] = userId;
+        usageDoc["counter_id"] = counterId;
+        usageDoc["usage_amount"] = usageAmount;
+        
+        String usagePayload;
+        serializeJson(usageDoc, usagePayload);
+        
+        Serial.println("Sending usage data: " + usagePayload);
+        int httpCode = http.POST(usagePayload);
+        
+        if (httpCode == HTTP_CODE_OK) {
+            Serial.println("Water usage recorded successfully");
+            usageAmount = 0;  // Reset usage amount after successful recording
+            hasSentUsage = true;  // Mark that we've sent the usage
+        } else {
+            Serial.printf("Failed to record usage, HTTP code: %d\n", httpCode);
+            Serial.println("Error: " + http.errorToString(httpCode));
+        }
+        http.end();
     }
    
-    // Update valve status after reporting usage
+    // Update valve status
     updateValveStatus("close");
-   
-    // Report status immediately when valve is closed
-    reportStatus();
 }
 
 void reportWaterUsage() {
@@ -613,7 +663,7 @@ void reportWaterUsage() {
    
     StaticJsonDocument<200> doc;
     doc["user_id"] = userId;
-    doc["counter_id"] = counterId;  // Include the counter ID
+    doc["counter_id"] = counterId;
     doc["usage_amount"] = usageAmount;
    
     String jsonPayload;
@@ -628,11 +678,11 @@ void reportWaterUsage() {
         String response = http.getString();
         Serial.println("Response: " + response);
         Serial.printf("Usage of %.3f cubic meters reported successfully\n", usageAmount);
-        usageAmount = 0;  
+        usageAmount = 0;  // Reset usage amount after successful report
     } else {
         Serial.printf("Failed to report usage, HTTP code: %d\n", httpCode);
         Serial.println("Error: " + http.errorToString(httpCode));
-        // Try again later
+        // Don't reset hasSentUsage if the report failed
     }
     http.end();
 }
