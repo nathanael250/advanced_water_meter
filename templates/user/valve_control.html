@@ -1,7 +1,5 @@
 {% extends "shared/base.html" %}
-
 {% block page_title %}Valve Control{% endblock %}
-
 {% block content %}
 <div class="max-w-4xl mx-auto">
     <div class="bg-white rounded-lg shadow-md overflow-hidden">
@@ -20,11 +18,10 @@
                     </div>
                 </div>
             </div>
-
             <div class="flex space-x-4">
                 <form action="{{ url_for('valve_control') }}" method="post" class="flex-1" id="open-form">
                     <input type="hidden" name="action" value="open">
-                    <button type="submit" 
+                    <button type="submit"
                             id="open-button"
                             class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-6 rounded-md transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                             {% if valve_status == 'open' or not has_balance %}disabled{% endif %}>
@@ -34,7 +31,7 @@
                 
                 <form action="{{ url_for('valve_control') }}" method="post" class="flex-1" id="close-form">
                     <input type="hidden" name="action" value="close">
-                    <button type="submit" 
+                    <button type="submit"
                             id="close-button"
                             class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-md transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                             {% if valve_status == 'closed' %}disabled{% endif %}>
@@ -57,28 +54,37 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Function to update UI
     function updateUI(data) {
-        valveStatus.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
-        remainingBalance.textContent = `${data.remaining_balance.toFixed(2)} cubic meters`;
-        
-        if (data.status === 'open') {
-            openButton.disabled = true;
-            closeButton.disabled = false;
-        } else {
-            openButton.disabled = !data.has_balance;
-            closeButton.disabled = true;
+        if (data.status) {
+            valveStatus.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+            
+            if (data.remaining_balance !== undefined) {
+                remainingBalance.textContent = `${parseFloat(data.remaining_balance).toFixed(2)} cubic meters`;
+            }
+            
+            if (data.status === 'open') {
+                openButton.disabled = true;
+                closeButton.disabled = false;
+            } else {
+                openButton.disabled = !(data.can_open || data.has_balance);
+                closeButton.disabled = true;
+            }
         }
     }
     
     // Function to fetch current status
     function fetchStatus() {
-        fetch('/api/valve-status/{{ current_user.id }}')
-            .then(response => response.json())
-            .then(data => {
-                if (!data.error) {
-                    updateUI(data);
-                }
-            })
-            .catch(error => console.error('Error fetching status:', error));
+        fetch('/api/get-valve-status/{{ current_user.id }}', {
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (!data.error) {
+                updateUI(data);
+            }
+        })
+        .catch(error => console.error('Error fetching status:', error));
     }
     
     // Initial status fetch
@@ -90,28 +96,92 @@ document.addEventListener('DOMContentLoaded', function() {
     // Handle form submissions with AJAX
     openForm.addEventListener('submit', function(e) {
         e.preventDefault();
-        fetch('/user/valve-control', {
+        
+        // Show loading state
+        openButton.disabled = true;
+        openButton.textContent = 'Opening...';
+        
+        fetch('/api/valve-control/{{ current_user.id }}', {
             method: 'POST',
-            body: new FormData(openForm)
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: JSON.stringify({
+                action: 'open',
+                counter_id: '{{ current_user.counter_id }}'
+            })
         })
-        .then(response => response.text())
-        .then(() => {
-            fetchStatus(); // Update status immediately after action
+        .then(response => response.json())
+        .then(data => {
+            // Reset button text
+            openButton.textContent = 'Open Valve';
+            
+            if (data.success) {
+                // Update UI with the new status
+                updateUI({
+                    status: data.valve_status || 'open',
+                    remaining_balance: data.remaining_balance,
+                    can_open: true
+                });
+            } else {
+                console.error('Error:', data.error || 'Unknown error');
+                alert('Failed to open valve: ' + (data.error || 'Unknown error'));
+                // Re-enable button if there was an error
+                openButton.disabled = false;
+            }
         })
-        .catch(error => console.error('Error opening valve:', error));
+        .catch(error => {
+            console.error('Error opening valve:', error);
+            openButton.textContent = 'Open Valve';
+            openButton.disabled = false;
+            alert('Failed to open valve. Please try again.');
+        });
     });
     
     closeForm.addEventListener('submit', function(e) {
         e.preventDefault();
-        fetch('/user/valve-control', {
+        
+        // Show loading state
+        closeButton.disabled = true;
+        closeButton.textContent = 'Closing...';
+        
+        fetch('/api/valve-control/{{ current_user.id }}', {
             method: 'POST',
-            body: new FormData(closeForm)
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: JSON.stringify({
+                action: 'close',
+                counter_id: '{{ current_user.counter_id }}'
+            })
         })
-        .then(response => response.text())
-        .then(() => {
-            fetchStatus(); // Update status immediately after action
+        .then(response => response.json())
+        .then(data => {
+            // Reset button text
+            closeButton.textContent = 'Close Valve';
+            
+            if (data.success) {
+                // Update UI with the new status
+                updateUI({
+                    status: data.valve_status || 'closed',
+                    remaining_balance: data.remaining_balance,
+                    can_open: true
+                });
+            } else {
+                console.error('Error:', data.error || 'Unknown error');
+                alert('Failed to close valve: ' + (data.error || 'Unknown error'));
+                // Re-enable button if there was an error
+                closeButton.disabled = false;
+            }
         })
-        .catch(error => console.error('Error closing valve:', error));
+        .catch(error => {
+            console.error('Error closing valve:', error);
+            closeButton.textContent = 'Close Valve';
+            closeButton.disabled = false;
+            alert('Failed to close valve. Please try again.');
+        });
     });
 });
 </script>
