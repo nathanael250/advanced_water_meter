@@ -2141,6 +2141,11 @@ def api_valve_control():
         db.session.rollback()
         return jsonify({"success": False, "message": str(e)}), 500
 
+
+def ting():
+    pass
+
+
 @app.route("/api/check-balance/<user_id>", methods=["GET"])
 def check_balance(user_id):
     """
