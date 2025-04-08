@@ -53,11 +53,15 @@ app.config["SQLALCHEMY_DATABASE_URI"] = (
 )
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["SECRET_KEY"] = "your-secret-key"  # Change this to a secure secret key
+
+# Initialize extensions
 db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 
 # Login Manager Setup
 login_manager = LoginManager(app)
 login_manager.login_view = "login"  # Changed from 'admin_login' to 'login'
+
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
