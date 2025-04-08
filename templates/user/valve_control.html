@@ -17,9 +17,9 @@
                     <div>
                         <h3 class="text-lg font-semibold text-gray-700">Remaining Balance</h3>
                         <p class="text-gray-600" id="remaining-balance">{{ "%.2f"|format(remaining_balance) }} cubic meters</p>
-                    </div>
                 </div>
             </div>
+        </div>
 
             <div class="flex space-x-4">
                 <form action="{{ url_for('valve_control') }}" method="post" class="flex-1" id="open-form">
@@ -113,6 +113,6 @@ document.addEventListener('DOMContentLoaded', function() {
         })
         .catch(error => console.error('Error closing valve:', error));
     });
-});
+    });
 </script>
 {% endblock %}

@@ -147,7 +147,7 @@ class WaterUsage(db.Model):
     usage_amount = db.Column(db.Float, nullable=False)
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
     acknowledged = db.Column(db.Boolean, default=False)
-    
+
     # Add relationship with Counter
     counter = db.relationship("Counter", backref="water_usages")
 
@@ -172,9 +172,9 @@ class ValveOperation(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     counter_id = db.Column(db.String(50), db.ForeignKey("counter.counter_id"), nullable=False)
-    action = db.Column(db.String(20), nullable=False)  # 'open' or 'close'
+    action = db.Column(db.String(20), nullable=False)  # 'opened' or 'closed'
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
-    duration = db.Column(db.Integer, nullable=True)  # Duration in seconds if action is 'close'
+    duration = db.Column(db.Integer, nullable=True)  # Duration in seconds if action is 'closed'
 
     user = db.relationship("User", backref="valve_operations")
     counter = db.relationship("Counter", backref="valve_operations")
@@ -225,7 +225,7 @@ def account_details():
 
     if not account:
         flash("Account not found", "error")
-        return redirect(url_for("user_dashboard"))
+        return redirect(url_for("login"))
 
     # Get recent transactions
     transactions = (
@@ -285,7 +285,7 @@ def admin_dashboard():
     admin = Admin.query.filter_by(id=current_user.id).first()
     if not admin:
         flash("Access denied. Admin privileges required.", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("login"))
 
     # Get total water meters
     total_meters = Counter.query.count()
@@ -441,7 +441,7 @@ def admin_users():
     admin = Admin.query.filter_by(id=current_user.id).first()
     if not admin:
         flash("Access denied. Admin privileges required.", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("login"))
 
     # Get filter parameters
     search = request.args.get("search", "")
@@ -496,7 +496,7 @@ def update_user_status(user_id):
 def admin_activities():
     admin = Admin.query.filter_by(id=current_user.id).first()
     if not admin:
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("login"))
 
     # Get all activities
     activities = []
@@ -554,7 +554,7 @@ def admin_alerts():
     admin = Admin.query.filter_by(id=current_user.id).first()
     if not admin:
         flash("Access denied. Admin privileges required.", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("login"))
 
     alerts = []
 
@@ -695,7 +695,7 @@ def manage_counters():
     admin = Admin.query.filter_by(id=current_user.id).first()
     if not admin:
         flash("Access denied. Admin privileges required.", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("login"))
 
     # Get all counters with their assignments and latest readings
     counters = Counter.query.all()
@@ -728,7 +728,7 @@ def manage_counters():
 def water_usage_page():
     admin = Admin.query.filter_by(id=current_user.id).first()
     if not admin:
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("login"))
 
     # Get water usage data with counter information
     usage_data = WaterUsage.query.join(Counter).order_by(WaterUsage.timestamp.desc()).all()
@@ -747,7 +747,7 @@ def water_usage_page():
             }
         usage_by_counter[usage.counter_id]['total_usage'] += usage.usage_amount
         usage_by_counter[usage.counter_id]['usage_count'] += 1
-    
+
     return render_template(
         "admin/water_usage.html",
         usage_data=usage_data,
@@ -763,7 +763,7 @@ def billing():
     admin = Admin.query.filter_by(id=current_user.id).first()
     if not admin:
         flash("Access denied. Admin privileges required.", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("login"))
 
     # Get filter parameters
     user_id = request.args.get("user_id", type=int)
@@ -2057,7 +2057,7 @@ def admin_send_notification():
     # Check if the current user is an admin
     admin = Admin.query.filter_by(id=current_user.id).first()
     if not admin:
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("login"))
 
     users = User.query.filter(User.pushover_key.isnot(None)).all()
 
@@ -2108,11 +2108,11 @@ def api_valve_control():
             return jsonify({"success": False, "message": "Counter not found"}), 404
             
         # Update valve status in database
-        if action == "open":
-            counter.status = "opened_opened"
+        if action == "opened":
+            counter.status = "opened"
             success = True
             message = "Valve opened successfully"
-        elif action == "close":
+        elif action == "closed":
             counter.status = "closed"
             success = True
             message = "Valve closed successfully"
@@ -2204,7 +2204,7 @@ def valve_control():
     try:
         if request.method == 'POST':
             action = request.form.get('action')
-            if action in ['open', 'close']:
+            if action in ['opened', 'closed']:
                 # Get the user's counter
                 counter = Counter.query.filter_by(counter_id=current_user.counter_id).first()
                 if counter:
@@ -2220,15 +2220,15 @@ def valve_control():
                     # Update counter status
                     counter.status = action
                     db.session.commit()
-                    
-                    flash(f'Valve {action}ed successfully', 'success')
-                    return redirect(url_for('valve_control'))  # Redirect back to the same page
+
+                    flash(f'Valve {action} successfully', 'success')
+                    return redirect(url_for('valve_control'))
                 else:
                     flash('No counter assigned to your account', 'error')
             else:
                 flash('Invalid action', 'error')
         
-        # Get current status
+        # GET request - show valve control page
         counter = Counter.query.filter_by(counter_id=current_user.counter_id).first()
         water_balance = UserWaterBalance.query.filter_by(user_id=current_user.id).first()
         
@@ -2236,7 +2236,7 @@ def valve_control():
             water_balance = UserWaterBalance(user_id=current_user.id, cubic_meters=0.0)
             db.session.add(water_balance)
             db.session.commit()
-        
+
         return render_template('user/valve_control.html', 
                             valve_status=counter.status if counter else 'closed',
                             remaining_balance=water_balance.cubic_meters,
@@ -2246,64 +2246,6 @@ def valve_control():
         print(f"Error in valve_control: {str(e)}")
         flash('An error occurred while accessing valve control', 'error')
         return redirect(url_for('user_dashboard'))
-
-
-@app.route('/borrow-water', methods=['GET', 'POST'])
-@login_required
-def borrow_water():
-    if request.method == 'POST':
-        amount = float(request.form.get('amount', 0))
-        terms = request.form.get('terms') == 'on'
-        
-        if not terms:
-            flash('You must agree to the terms and conditions', 'error')
-            return redirect(url_for('borrow_water'))
-            
-        if amount <= 0 or amount > 2:
-            flash('Amount must be between 0.1 and 2 cubic meters', 'error')
-            return redirect(url_for('borrow_water'))
-            
-        # Check if user already has an active loan
-        active_loan = WaterLoan.query.filter_by(
-            user_id=current_user.id,
-            status='active'
-        ).first()
-        
-        if active_loan:
-            flash('You already have an active loan', 'error')
-            return redirect(url_for('borrow_water'))
-            
-        try:
-            # Create new loan
-            loan = WaterLoan(
-                user_id=current_user.id,
-                amount=amount,
-                status='active',
-                borrowed_at=datetime.utcnow()
-            )
-            
-            db.session.add(loan)
-            db.session.commit()
-            flash(f'Successfully borrowed {amount} cubic meters of water', 'success')
-            return redirect(url_for('borrow_water'))
-        except Exception as e:
-            db.session.rollback()
-            flash('An error occurred while processing your loan', 'error')
-            return redirect(url_for('borrow_water'))
-    
-    # GET request - show borrow water page
-    active_loan = WaterLoan.query.filter_by(
-        user_id=current_user.id,
-        status='active'
-    ).first()
-    
-    loan_history = WaterLoan.query.filter_by(
-        user_id=current_user.id
-    ).order_by(WaterLoan.borrowed_at.desc()).all()
-    
-    return render_template('user/borrow_water.html',
-                         active_loan=active_loan,
-                         loan_history=loan_history)
 
 @app.route("/api/update-status/<user_id>", methods=["POST"])
 def update_status(user_id):
@@ -2350,7 +2292,7 @@ def update_status(user_id):
         db.session.add(valve_op)
         
         db.session.commit()
-        
+
         return jsonify({
             "success": True,
             "message": "Status updated successfully",
@@ -2368,7 +2310,7 @@ def get_valve_status(user_id):
         user = User.query.get(user_id)
         if not user:
             return jsonify({"error": "User not found"}), 404
-            
+
         counter = Counter.query.filter_by(counter_id=user.counter_id).first()
         if not counter:
             return jsonify({"error": "Counter not found"}), 404
@@ -2400,7 +2342,7 @@ def record_usage():
         user_id = data.get("user_id")
         counter_id = data.get("counter_id")
         usage_amount = data.get("usage_amount")
-        
+
         if not all([user_id, counter_id, usage_amount]):
             return jsonify({"error": "Missing required fields"}), 400
             
@@ -2419,7 +2361,7 @@ def record_usage():
             water_balance.last_updated = datetime.utcnow()
         
         db.session.commit()
-        
+
         return jsonify({"success": True, "message": "Usage recorded successfully"}), 200
         
     except Exception as e:
@@ -2433,7 +2375,7 @@ def admin_loans():
     admin = Admin.query.filter_by(id=current_user.id).first()
     if not admin:
         flash("Access denied. Admin privileges required.", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("login"))
 
     # Get all loans with user details
     loans = WaterLoan.query.order_by(WaterLoan.borrowed_at.desc()).all()
@@ -2450,7 +2392,7 @@ def add_counter():
     admin = Admin.query.filter_by(id=current_user.id).first()
     if not admin:
         flash("Access denied. Admin privileges required.", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("login"))
 
     try:
         counter_id = request.form.get("counter_id")
@@ -2468,7 +2410,7 @@ def add_counter():
         )
         db.session.add(new_counter)
         db.session.commit()
-        
+
         flash("Water meter added successfully.", "success")
     except Exception as e:
         db.session.rollback()
@@ -2483,7 +2425,7 @@ def assign_counter():
     admin = Admin.query.filter_by(id=current_user.id).first()
     if not admin:
         flash("Access denied. Admin privileges required.", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("login"))
 
     try:
         counter_id = request.form.get("counter_id")
@@ -2507,7 +2449,7 @@ def assign_counter():
         counter.assigned_to = user.id_card
         user.counter_id = counter_id
         db.session.commit()
-        
+
         flash("Water meter assigned successfully.", "success")
     except Exception as e:
         db.session.rollback()
@@ -2587,7 +2529,7 @@ def reset_user_password(user_id):
         db.session.commit()
 
         return jsonify({
-            "success": True,
+                    "success": True,
             "new_password": new_password
         })
     except Exception as e:
@@ -2610,7 +2552,7 @@ def user_details(user_id):
     admin = Admin.query.filter_by(id=current_user.id).first()
     if not admin:
         flash("Access denied. Admin privileges required.", "error")
-        return redirect(url_for("index"))
+        return redirect(url_for("login"))
 
     # Get user details
     user = User.query.get_or_404(user_id)
@@ -2664,7 +2606,7 @@ def reset_password(token):
     if not user or not user.reset_token_expiry or user.reset_token_expiry < datetime.utcnow():
         flash("Invalid or expired password reset link.", "error")
         return redirect(url_for("forgot_password"))
-    
+
     if request.method == "POST":
         password = request.form.get("password")
         confirm_password = request.form.get("confirm_password")
@@ -2682,19 +2624,90 @@ def reset_password(token):
         user.reset_token = None
         user.reset_token_expiry = None
         db.session.commit()
-        
+
         flash("Your password has been reset successfully. Please login with your new password.", "success")
         return redirect(url_for("login"))
     
     # Pass the token to the template for the form action
     return render_template("auth/reset_password.html", token=token)
 
+@app.route("/user/borrow-water", methods=["GET", "POST"])
+@login_required
+def borrow_water():
+    if request.method == "POST":
+        try:
+            amount = float(request.form.get("amount", 0))
+            
+            # Validate amount
+            if amount <= 0 or amount > 2:
+                flash("Invalid amount. You can borrow between 0.1 and 2 cubic meters.", "error")
+                return redirect(url_for("borrow_water"))
+            
+            # Check for active loan
+            active_loan = WaterLoan.query.filter_by(
+                user_id=current_user.id,
+                status="active"
+            ).first()
+            
+            if active_loan:
+                flash("You already have an active loan. Please repay it before borrowing more.", "error")
+                return redirect(url_for("borrow_water"))
+            
+            # Create new loan
+            new_loan = WaterLoan(
+                user_id=current_user.id,
+                amount=amount,
+                status="active",
+                borrowed_at=datetime.utcnow()
+            )
+            db.session.add(new_loan)
+            
+            # Update water balance
+            water_balance = UserWaterBalance.query.filter_by(user_id=current_user.id).first()
+            if not water_balance:
+                water_balance = UserWaterBalance(user_id=current_user.id, cubic_meters=0.0)
+                db.session.add(water_balance)
+            
+            water_balance.cubic_meters += amount
+            water_balance.last_updated = datetime.utcnow()
+            
+            db.session.commit()
+            
+            # Send notification if user has Pushover configured
+            if current_user.pushover_key:
+                send_pushover_notification(
+                    current_user.pushover_key,
+                    "Water Loan Approved",
+                    f"Your loan of {amount} cubic meters has been approved and added to your water balance."
+                )
+            
+            flash(f"Successfully borrowed {amount} cubic meters of water.", "success")
+            return redirect(url_for("user_dashboard"))
+            
+        except Exception as e:
+            db.session.rollback()
+            flash(f"Error processing loan: {str(e)}", "error")
+            return redirect(url_for("borrow_water"))
+    
+    # GET request - show borrow water page
+    active_loan = WaterLoan.query.filter_by(
+        user_id=current_user.id,
+        status="active"
+    ).first()
+    
+    loan_history = WaterLoan.query.filter_by(
+        user_id=current_user.id
+    ).order_by(WaterLoan.borrowed_at.desc()).all()
+    
+    return render_template(
+        "user/borrow_water.html",
+        active_loan=active_loan,
+        loan_history=loan_history
+    )
+
 if __name__ == "__main__":
     with app.app_context():
-        # Create all tables
         db.create_all()
-        # Add status column if it doesn't exist
-        add_status_column()
-        app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(debug=True, host="0.0.0.0", port=5000)
 
 #final
